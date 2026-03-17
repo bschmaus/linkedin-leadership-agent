@@ -23,6 +23,8 @@ flowchart TD
 
     RSS --> SCAN
     LEARN --> SCAN
+    LEARN --> SELECT
+    LEARN --> WRITE
     SCAN -->|research_notes.md| SELECT
     SELECT -->|selection_notes.md| WRITE
     WRITE -->|daily_articles.md| POST
