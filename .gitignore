@@ -1,0 +1,39 @@
+# Environment variables — never commit these
+.env
+
+# Runtime data — generated daily, not source code
+data/research_notes.md
+data/selection_notes.md
+data/post_assets.md
+data/pipeline.log
+data/daily_articles.md
+data/learnings.md
+
+# Analytics uploads — personal data
+data/analytics/
+
+# Generated image cards
+data/assets/
+
+# Personal voice and brand files — keep private or customise per fork
+# (comment these out if you want to share them)
+data/voice.md
+data/ow_brand_guidelines.md
+
+# Fonts — large binaries, download separately (see README)
+data/fonts/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# macOS
+.DS_Store
+.AppleDouble

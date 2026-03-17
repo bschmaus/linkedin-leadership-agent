@@ -1,0 +1,9 @@
+anthropic
+feedparser
+requests
+python-dotenv
+openai
+google-genai
+Pillow
+certifi
+openpyxl
