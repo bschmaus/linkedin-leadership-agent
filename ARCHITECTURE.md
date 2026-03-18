@@ -29,21 +29,32 @@ RSS / web sources
        │                                   selection_notes.md
        │                                            │
        │                                            ▼
-       │                                   ┌─────────────────┐
-       │                                   │  Article Writer │
-       │                                   │  (Opus 4.6)     │
-       │                                   └─────────────────┘
+       │                         ┌─────────────────────────────────┐
+       │          ◄──── REVISE ──│      Article Writer             │
+       │          (with critique)│      (Opus 4.6)                 │
+       │                         └─────────────────────────────────┘
        │                                            │
        │                                    daily_articles.md
        │                                            │
        │                                            ▼
-       │                                   ┌─────────────────┐
-       │                                   │  Poster Agent   │
-       │                                   │  (Opus 4.6)     │──► image card (.png)
-       │                                   └─────────────────┘
+       │                         ┌─────────────────────────────────┐
+       │          ◄──── REVISE ──│      Poster Agent               │──► image card (.png)
+       │        (format flagged) │      (Opus 4.6+think)           │
+       │                         └─────────────────────────────────┘
        │                                            │
        │                                    post_assets.md
        │                                            │
+       │                                            ▼
+       │                         ┌─────────────────────────────────┐
+       │                         │  Red Team Agent                 │◄── live source fetch
+       │                         │  (Opus 4.6+think) max 3 iter.   │
+       │                         └─────────────────────────────────┘
+       │                                  │         │
+       │                         APPROVED │         │ REVISE → back to Article Writer
+       │                                  │         │          (+ Poster if format flagged)
+       │                                  ▼         │
+       │                       redteam_notes.md     │
+       │                                  │         │
        │                               [manual: post on LinkedIn]
        │                                            │
        │                               [weekly: upload analytics]
@@ -54,6 +65,8 @@ RSS / web sources
        └────────────────────────────────── │  (Opus 4.6)     │
                                            └─────────────────┘
 ```
+
+Note: the Red Team → Article Writer → Poster loop runs up to 3 times. On `APPROVED` the loop exits early. If the iteration limit is reached, the best available version proceeds to posting.
 
 `learnings.md` is the **system's long-term memory**. It is the only file that persists across days and grows indefinitely. Every agent that involves creative judgement reads it as context.
 
@@ -78,6 +91,8 @@ RSS / web sources
 **Why Opus?** This is the "editor-in-chief" decision. It requires nuanced reasoning about freshness, relevance, and accumulated style feedback. Sonnet would produce acceptable selections; Opus produces better ones consistently.
 
 **Output contract:** The selection agent always writes a full writing brief — not just a topic title. This brief (`selection_notes.md`) includes the core message, angle, tone, key points to hit, a suggested hook, and a CTA. The article writer treats this as a creative brief, not a topic prompt.
+
+**From v2:** Selection also reads the identity/audience sections of `voice.md` (stripped of writing style) so the editorial judgment is informed by who the author is and who they write for.
 
 ---
 
@@ -115,6 +130,29 @@ RSS / web sources
 - `image_subline` — one-line descriptor (max 55 chars)
 - `image_caption` — supporting sentence (max 110 chars, can wrap)
 
+**From v2:** Poster reads `learnings.md` so accumulated format feedback (e.g. "polls underperform for analytical content") closes the feedback loop for format decisions.
+
+---
+
+### Agent 4.5 — Red Team (`claude-opus-4-6` + adaptive thinking)
+
+**Why after Poster, not after Article Writer?** The Red Team needs both the post text and the format/asset decision to evaluate the full package. Challenging the text alone would miss format mismatches — a technically accurate post in the wrong format is still a weak post.
+
+**Two-lens design:**
+
+1. **Factual integrity** — structural, not web-search-based. The agent verifies internal consistency with the brief (are the claims in the post supported by the selection notes?) and uses a live fetch of the source article to add external grounding. This catches hallucinated statistics and claims that drift from the original source without requiring a general web search.
+
+2. **Client perception** — the target audience is senior consulting clients: C-level, CHROs, transformation leads. This group has a fine-tuned bullshit detector for corporate jargon, vague assertions, and thought leadership clichés. The Red Team holds the post to the standard of "would a CHRO share this, or roll their eyes at it?"
+
+**Iteration loop design:**
+- `REVISE` verdict triggers an article_writer re-run with the critique injected as a mandatory section in the prompt
+- Poster only re-runs if the format or assets are explicitly flagged — regenerating an image card on every text revision would be cost-disproportionate
+- Maximum 3 iterations to prevent infinite loops
+
+**Stop conditions:** `APPROVED` verdict exits the loop immediately. If the iteration limit is reached, the best available version (the most recently generated post) proceeds to the posting step. The full iteration history is preserved in `redteam_notes.md` for later review.
+
+**Why adaptive thinking?** The dual-lens assessment requires holding two distinct audience perspectives simultaneously — one technical (fact verification), one political (executive perception) — and making a binary go/no-go judgment. This is reasoning-intensive: a straightforward generation task it is not.
+
 ---
 
 ### Agent 5 — Assessment (`claude-opus-4-6`)
@@ -131,6 +169,18 @@ RSS / web sources
 **Analytics enrichment:** When a LinkedIn Analytics Excel export is present in `data/analytics/`, the assessment gains quantitative grounding — impressions, engagement rate, rank against other posts that week. This allows conclusions like: *"The hook was strong — this post captured 45% of all weekly impressions."*
 
 **Date matching:** The assessment matches the latest post in `daily_articles.md` to analytics data by publish date. The analytics export covers a rolling 7-day window.
+
+---
+
+## Reference files (static inputs)
+
+Some files are not written by any agent — they are maintained manually and serve as stable context injected into specific agents.
+
+| File | Read by | Purpose |
+|---|---|---|
+| data/learnings.md | all agents | accumulated style & topic feedback |
+| data/voice.md | selection (identity/audience only), article_writer, poster | author tone, style, and audience |
+| data/ow_brand_guidelines.md | poster | visual brand for image cards |
 
 ---
 
@@ -172,4 +222,4 @@ Both jobs are managed by macOS `launchd` — the system-native scheduler, runnin
 
 **4. Human stays in the loop at the right points.** The pipeline is fully automated for the mechanical steps. The two steps that require human judgement or access (posting on LinkedIn, providing real performance data) are explicitly left to the human. The pipeline produces the best possible input for those steps and gets out of the way.
 
-**5. Cost-proportionate model selection.** Sonnet for parsing and extraction. Opus for reasoning, judgement, and creative generation. Adaptive thinking only where it genuinely changes the output quality (Selection).
+**5. Cost-proportionate model selection.** Sonnet for parsing and extraction. Opus for reasoning, judgement, and creative generation. Adaptive thinking only where it genuinely changes the output quality (Selection, Poster, Red Team — not Assessment).

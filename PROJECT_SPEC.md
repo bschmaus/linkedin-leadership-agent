@@ -29,12 +29,19 @@ linkedin-leadership-agent/
 │   ├── selection.py          # Selects best topic → selection_notes.md
 │   ├── article_writer.py     # Writes LinkedIn post → daily_articles.md
 │   ├── poster.py             # Posts to LinkedIn (or prints for manual posting)
-│   └── assessment.py         # Assesses post quality → learnings.md
+│   ├── red_team.py           # Critiques post → redteam_notes.md; triggers re-runs
+│   ├── assessment.py         # Assesses post quality → learnings.md
+│   ├── image_generator.py    # Generates image cards (Pillow / DALL-E)
+│   ├── analytics_reader.py   # Reads LinkedIn analytics export
+│   └── utils.py              # Shared utilities
 └── data/
     ├── learnings.md           # Assessment writes; ALL agents read at start
     ├── daily_articles.md      # Article writer appends; all agents read
     ├── research_notes.md      # Scanning writes; selection reads
-    └── selection_notes.md     # Selection writes; article_writer reads
+    ├── selection_notes.md     # Selection writes; article_writer reads
+    ├── voice.md               # Manual; selection/article_writer/poster read
+    ├── post_assets.md         # Poster writes; red_team/assessment read
+    └── redteam_notes.md       # Red team writes; review only
 ```
 
 ---
@@ -47,6 +54,9 @@ linkedin-leadership-agent/
 | data/daily_articles.md  | article_writer| all agents | History of past posts (avoid repetition)     |
 | data/research_notes.md  | scanning      | selection  | Today's research findings                    |
 | data/selection_notes.md | selection     | article_writer | Chosen topic, angle, key points          |
+| data/voice.md           | (manual)      | selection, article_writer, poster | Author identity, audience, and writing style |
+| data/post_assets.md     | poster        | red_team, assessment | Format decision and image asset path  |
+| data/redteam_notes.md   | red_team      | (review only) | Iteration history per post               |
 
 ---
 
@@ -67,12 +77,13 @@ linkedin-leadership-agent/
 - Writes structured markdown to `research_notes.md`
 
 ### 2. Selection Agent (`agents/selection.py`)
-**Input:** `data/research_notes.md`, `data/daily_articles.md`, `data/learnings.md`
+**Input:** `data/research_notes.md`, `data/daily_articles.md`, `data/learnings.md`, `data/voice.md` (identity/audience sections only)
 **Output:** `data/selection_notes.md`
 
 - Reviews all research candidates
 - Picks the single best topic for today's post
 - Considers: recency, uniqueness vs. past articles, engagement potential, learnings
+- Reads the identity and audience sections of `voice.md` so editorial judgement is informed by who the author is and who they write for
 - Writes: chosen topic, angle, 3–5 key talking points, suggested hook/opening line
 
 ### 3. Article Writer Agent (`agents/article_writer.py`)
@@ -85,12 +96,27 @@ linkedin-leadership-agent/
 - Appends the post with date/topic header to `daily_articles.md`
 
 ### 4. Poster Agent (`agents/poster.py`)
-**Input:** Latest entry from `data/daily_articles.md`
-**Output:** Posts to LinkedIn OR prints formatted post for manual copy-paste
+**Input:** Latest entry from `data/daily_articles.md`, `data/learnings.md`, `data/voice.md`
+**Output:** Posts to LinkedIn OR prints formatted post for manual copy-paste; writes `data/post_assets.md`
 
 - Primary: LinkedIn API via `requests` (requires LINKEDIN_ACCESS_TOKEN env var)
 - Fallback: Pretty-prints the post to console with copy instructions
 - Records posting status back into `daily_articles.md`
+- Reads `learnings.md` for format decisions (e.g. accumulated feedback on which formats work for which content types)
+- Writes `post_assets.md` with the chosen format and image asset path
+
+### 4.5. Red Team Agent (`agents/red_team.py`)
+**Input:** `data/daily_articles.md`, `data/post_assets.md`, `data/selection_notes.md`, `data/learnings.md`, `data/voice.md`, source article (fetched live)
+**Output:** `data/redteam_notes.md` (critique history); triggers article_writer and poster re-runs
+
+- Evaluates the post through two lenses:
+  1. **Factual integrity** — verifies claims against the live-fetched source article; checks internal consistency with the brief
+  2. **Client perception** — applies a high bar: C-level, CHRO, and transformation leads are the intended audience; senior consulting clients have a fine-tuned bullshit detector
+- Issues a verdict: `APPROVED` or `REVISE`
+- On `REVISE`: always triggers an article_writer re-run with critique injected as a mandatory section; triggers a poster re-run only if format or assets are flagged (cost-proportionate)
+- Maximum 3 iterations; on reaching the limit, outputs the best available version
+- `APPROVED` verdict exits the loop early
+- Appends full critique and verdict to `redteam_notes.md` for each iteration
 
 ### 5. Assessment Agent (`agents/assessment.py`)
 **Input:** Latest entry from `data/daily_articles.md`, optional engagement metrics
@@ -106,10 +132,14 @@ linkedin-leadership-agent/
 ## Orchestrator (`orchestrator.py`)
 
 ```bash
-python orchestrator.py                   # Full pipeline
-python orchestrator.py --skip-posting    # Stop before posting (draft mode)
-python orchestrator.py --assess-only     # Run only assessment agent
-python orchestrator.py --from selection  # Resume from a specific step
+python3 orchestrator.py                         # full pipeline
+python3 orchestrator.py --from scan             # restart from scanning
+python3 orchestrator.py --from write            # restart from article writer
+python3 orchestrator.py --from redteam          # re-run red team + assessment only
+python3 orchestrator.py --only post             # regenerate image/assets only
+python3 orchestrator.py --only post --creative  # use DALL-E instead of typography card
+python3 orchestrator.py --only assess           # re-run assessment after analytics upload
+Available agent names: scan, select, write, post, redteam, assess
 ```
 
 ---
@@ -121,13 +151,22 @@ from pathlib import Path
 
 BASE_DIR            = Path(__file__).parent
 DATA_DIR            = BASE_DIR / "data"
+ASSETS_DIR          = BASE_DIR / "assets"
 
-LEARNINGS_FILE      = DATA_DIR / "learnings.md"
-DAILY_ARTICLES_FILE = DATA_DIR / "daily_articles.md"
-RESEARCH_NOTES_FILE = DATA_DIR / "research_notes.md"
+LEARNINGS_FILE       = DATA_DIR / "learnings.md"
+DAILY_ARTICLES_FILE  = DATA_DIR / "daily_articles.md"
+RESEARCH_NOTES_FILE  = DATA_DIR / "research_notes.md"
 SELECTION_NOTES_FILE = DATA_DIR / "selection_notes.md"
+VOICE_FILE           = DATA_DIR / "voice.md"
+POST_ASSETS_FILE     = DATA_DIR / "post_assets.md"
+REDTEAM_NOTES_FILE   = DATA_DIR / "redteam_notes.md"
 
 MODEL = "claude-opus-4-6"
+
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
 
 RSS_FEEDS = [
     "https://hbr.org/rss/topic/leadership",
@@ -165,9 +204,11 @@ python-dotenv
 2. `agents/selection.py` — topic selection
 3. `agents/article_writer.py` — LinkedIn post writing
 4. `agents/poster.py` — posting / manual fallback
-5. `agents/assessment.py` — quality assessment + learnings
-6. `orchestrator.py` — wire everything together
-7. `config.py` + data file initialization
+5. `agents/red_team.py` — factual + client-perception critique loop
+6. `agents/utils.py` — shared utilities (file I/O, HTTP helpers)
+7. `agents/assessment.py` — quality assessment + learnings
+8. `orchestrator.py` — wire everything together
+9. `config.py` + data file initialization
 
 ---
 
@@ -177,4 +218,4 @@ python-dotenv
 - `research_notes.md` and `selection_notes.md` are overwritten daily
 - Agents should be independently runnable (not just via orchestrator)
 - Use streaming for all Claude calls
-- Use `thinking: {"type": "adaptive"}` for selection and assessment agents
+- Use `thinking: {"type": "adaptive"}` for selection, poster, and red_team agents (not assessment)
