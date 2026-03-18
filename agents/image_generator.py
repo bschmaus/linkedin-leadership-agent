@@ -5,10 +5,10 @@ Renders branded LinkedIn card images using Pillow and local fonts.
 Default image generation method — pixel-perfect typography, no API cost.
 
 Centering logic:
-  - Content height is measured using bb[3] (draw-origin → glyph bottom) so
-    descenders never overlap the next element.
-  - Invisible top padding (bb[1]) is excluded from the centering calculation
-    so the visual block is truly centred on the canvas.
+  - Pass 1 measures visual height as bb[3]-bb[1] per text element (true glyph
+    height, excluding Playfair Display's large invisible top padding ~53px).
+  - Pass 2 tracks visual_y and draws at (x, visual_y - bb[1]) so the visible
+    glyph top aligns precisely. Works correctly for 1 or 2+ headline lines.
 """
 
 import re
@@ -53,9 +53,11 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[str]:
     return lines or [""]
 
 
-def _adv(draw: ImageDraw.ImageDraw, text: str, font) -> int:
-    """Pixels from draw origin to glyph bottom (used to advance y)."""
-    return draw.textbbox((0, 0), text, font=font)[3]
+def _vis(draw: ImageDraw.ImageDraw, text: str, font) -> tuple[int, int]:
+    """(visual_height, bb1) — visual_height = bb[3]-bb[1], bb1 = invisible top offset.
+    Draw text at (x, visual_y - bb1) so the visible glyph top aligns with visual_y."""
+    bb = draw.textbbox((0, 0), text, font=font)
+    return bb[3] - bb[1], bb[1]
 
 
 # ---------------------------------------------------------------------------
@@ -76,63 +78,71 @@ def render_card(headline: str, subline: str, caption: str, dest: Path) -> Path:
     cap_lines  = _wrap(draw, caption,  f_cap,  max_w) if caption else []
 
     # Spacing constants
-    BAR_H        = 8
-    BAR_TO_HEAD  = 32
+    BAR_H         = 8
+    BAR_TO_HEAD   = 32
     HEAD_LINE_GAP = 4
-    HEAD_TO_DIV  = 28
-    DIV_H        = 4
-    DIV_TO_SUB   = 24
-    SUB_TO_CAP   = 18
-    CAP_LINE_GAP = 8
+    HEAD_TO_DIV   = 28
+    DIV_H         = 4
+    DIV_TO_SUB    = 24
+    SUB_TO_CAP    = 18
+    CAP_LINE_GAP  = 8
 
-    # --- Pass 1: measure VISIBLE content height (exclude invisible top padding) ---
+    # --- Pass 1: measure VISUAL content height ---
+    # Uses bb[3]-bb[1] (true glyph height) so invisible font padding doesn't
+    # distort the centre calculation — critical for multi-line headlines.
     h = BAR_H + BAR_TO_HEAD
     for i, ln in enumerate(head_lines):
-        h += _adv(draw, ln, f_head)
+        vh, _ = _vis(draw, ln, f_head)
+        h += vh
         if i < len(head_lines) - 1:
             h += HEAD_LINE_GAP
     h += HEAD_TO_DIV + DIV_H + DIV_TO_SUB
     if subline:
-        h += _adv(draw, subline, f_sub) + SUB_TO_CAP
+        vh, _ = _vis(draw, subline, f_sub)
+        h += vh + SUB_TO_CAP
     for i, ln in enumerate(cap_lines):
-        h += _adv(draw, ln, f_cap)
+        vh, _ = _vis(draw, ln, f_cap)
+        h += vh
         if i < len(cap_lines) - 1:
             h += CAP_LINE_GAP
 
-    # True vertical centre (no bias — the invisible head padding creates
-    # natural visual weight at the top, so pure centre looks balanced)
     y_bar = max(PAD, (H - h) // 2)
 
     # --- Pass 2: render ---
+    # visual_y tracks the VISUAL top of the next element.
+    # Text is drawn at (x, visual_y - bb1) so the visible glyph aligns exactly.
 
     # Top-left gold accent bar
     draw.rectangle([(PAD, y_bar), (PAD + 64, y_bar + BAR_H)], fill=GOLD)
 
-    y = y_bar + BAR_H + BAR_TO_HEAD
+    visual_y = y_bar + BAR_H + BAR_TO_HEAD
 
     # Headline
     for i, ln in enumerate(head_lines):
-        draw.text((PAD, y), ln, font=f_head, fill=WHITE)
-        y += _adv(draw, ln, f_head)
+        vh, bb1 = _vis(draw, ln, f_head)
+        draw.text((PAD, visual_y - bb1), ln, font=f_head, fill=WHITE)
+        visual_y += vh
         if i < len(head_lines) - 1:
-            y += HEAD_LINE_GAP
+            visual_y += HEAD_LINE_GAP
 
     # Gold divider
-    y += HEAD_TO_DIV
-    draw.rectangle([(PAD, y), (PAD + 160, y + DIV_H)], fill=GOLD)
-    y += DIV_H + DIV_TO_SUB
+    visual_y += HEAD_TO_DIV
+    draw.rectangle([(PAD, visual_y), (PAD + 160, visual_y + DIV_H)], fill=GOLD)
+    visual_y += DIV_H + DIV_TO_SUB
 
     # Subline
     if subline:
-        draw.text((PAD, y), subline, font=f_sub, fill=GOLD)
-        y += _adv(draw, subline, f_sub) + SUB_TO_CAP
+        vh, bb1 = _vis(draw, subline, f_sub)
+        draw.text((PAD, visual_y - bb1), subline, font=f_sub, fill=GOLD)
+        visual_y += vh + SUB_TO_CAP
 
     # Caption
     for i, ln in enumerate(cap_lines):
-        draw.text((PAD, y), ln, font=f_cap, fill=MUTED)
-        y += _adv(draw, ln, f_cap)
+        vh, bb1 = _vis(draw, ln, f_cap)
+        draw.text((PAD, visual_y - bb1), ln, font=f_cap, fill=MUTED)
+        visual_y += vh
         if i < len(cap_lines) - 1:
-            y += CAP_LINE_GAP
+            visual_y += CAP_LINE_GAP
 
     # Bottom-right anchor bar
     draw.rectangle([(W - PAD - 64, H - PAD - 8), (W - PAD, H - PAD)], fill=GOLD)
