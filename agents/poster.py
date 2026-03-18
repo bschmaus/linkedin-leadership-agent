@@ -44,11 +44,18 @@ VOICE_FILE        = DATA_DIR / "voice.md"
 BRAND_FILE        = DATA_DIR / "ow_brand_guidelines.md"
 POST_ASSETS_FILE  = DATA_DIR / "post_assets.md"
 ASSETS_DIR        = DATA_DIR / "assets"
+SELECTION_FILE    = DATA_DIR / "selection_notes.md"
 
 
 # ---------------------------------------------------------------------------
 # Extract latest post from daily_articles.md
 # ---------------------------------------------------------------------------
+
+def extract_source_url(selection_notes: str) -> str:
+    """Extract the source URL from selection_notes.md, or empty string if not found."""
+    match = re.search(r"URL:\s*(https?://\S+)", selection_notes)
+    return match.group(1).strip() if match else ""
+
 
 def extract_latest_post(articles: str) -> tuple[str, str]:
     """Returns (topic_title, post_text) for the most recent entry."""
@@ -144,7 +151,7 @@ def decide_format(client: anthropic.Anthropic, post_text: str, voice: str, brand
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1500,
+        max_tokens=4000,
         thinking={"type": "adaptive"},
         system=FORMAT_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
@@ -160,7 +167,7 @@ def decide_format(client: anthropic.Anthropic, post_text: str, voice: str, brand
 # ---------------------------------------------------------------------------
 
 def save_assets(title: str, fmt: str, rationale: str, post_text: str, assets: dict,
-                image_path: Path | None = None) -> None:
+                image_path: Path | None = None, source_url: str = "") -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [
         f"# Post Assets — {timestamp}",
@@ -207,6 +214,15 @@ def save_assets(title: str, fmt: str, rationale: str, post_text: str, assets: di
         for slide in assets.get("slides", []):
             lines.append(f"### Slide {slide['slide']}: {slide['heading']}")
             lines.append(slide.get("body", "") + "\n")
+
+    lines += [
+        "\n---\n",
+        "## First Comment (post immediately after publishing)\n",
+    ]
+    if source_url:
+        lines.append(f"Source: {source_url}")
+    else:
+        lines.append("_No source URL found in selection_notes.md_")
 
     POST_ASSETS_FILE.write_text("\n".join(lines), encoding="utf-8")
     print(f"  ✅ Assets saved to {POST_ASSETS_FILE}")
@@ -310,7 +326,8 @@ def generate_image_creative(prompt: str, title: str) -> Path | None:
 # ---------------------------------------------------------------------------
 
 def print_manual_instructions(post_text: str, fmt: str, assets: dict,
-                              image_path: Path | None = None) -> None:
+                              image_path: Path | None = None,
+                              source_url: str = "") -> None:
     w = 68
     print("\n" + "═" * w)
     print("  READY TO POST — copy the text below into LinkedIn")
@@ -340,6 +357,11 @@ def print_manual_instructions(post_text: str, fmt: str, assets: dict,
         print(f"  ADD CAROUSEL — {assets.get('slide_count', '?')} slides")
         print("  (see data/post_assets.md for full slide content)")
 
+    print("─" * w)
+    if source_url:
+        print(f"  FIRST COMMENT: {source_url}")
+    else:
+        print("  FIRST COMMENT: (no source URL — add manually if referencing an article)")
     print("\n" + "═" * w + "\n")
 
 
@@ -378,9 +400,11 @@ def run(client: anthropic.Anthropic | None = None, creative: bool = False) -> No
     mode_label = "creative (DALL-E)" if creative else "typography card (Pillow)"
     print(f"📤 Poster Agent starting... [image mode: {mode_label}]")
 
-    articles = read_file(DAILY_ARTICLES_FILE)
-    voice    = read_file(VOICE_FILE)
-    brand    = read_file(BRAND_FILE)
+    articles   = read_file(DAILY_ARTICLES_FILE)
+    voice      = read_file(VOICE_FILE)
+    brand      = read_file(BRAND_FILE)
+    selection  = read_file(SELECTION_FILE)
+    source_url = extract_source_url(selection)
     title, post_text = extract_latest_post(articles)
 
     if not post_text:
@@ -418,10 +442,10 @@ def run(client: anthropic.Anthropic | None = None, creative: bool = False) -> No
                 print("  ⚠️  No image_headline in assets — skipping card generation.")
 
     # 3. Save to post_assets.md
-    save_assets(title, fmt, decision.get("rationale", ""), post_text, assets, image_path)
+    save_assets(title, fmt, decision.get("rationale", ""), post_text, assets, image_path, source_url)
 
     # 4. Print manual instructions
-    print_manual_instructions(post_text, fmt, assets, image_path)
+    print_manual_instructions(post_text, fmt, assets, image_path, source_url)
     update_post_status(fmt)
 
 
