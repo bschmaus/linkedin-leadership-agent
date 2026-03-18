@@ -11,6 +11,7 @@ Posting is always manual — LinkedIn does not allow API writes to personal prof
 Reads  : data/daily_articles.md       (latest post)
          data/voice.md                (author style)
          data/ow_brand_guidelines.md  (OW brand — applied to all visual briefs)
+         data/learnings.md            (accumulated format & style feedback)
 Writes : data/post_assets.md          (format decision + all assets for review)
          data/daily_articles.md       (updates status line)
 
@@ -28,50 +29,25 @@ from pathlib import Path
 
 import anthropic
 
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import (
     MODEL,
-    DAILY_ARTICLES_FILE,
     DATA_DIR,
+    DAILY_ARTICLES_FILE,
+    SELECTION_NOTES_FILE,
+    LEARNINGS_FILE,
+    VOICE_FILE,
+    POST_ASSETS_FILE,
+    ASSETS_DIR,
     GOOGLE_API_KEY,
     OPENAI_API_KEY,
     read_file,
     ensure_data_dir,
 )
+from agents.utils import extract_latest_post, extract_source_url, make_date_slug
 
-VOICE_FILE        = DATA_DIR / "voice.md"
-BRAND_FILE        = DATA_DIR / "ow_brand_guidelines.md"
-POST_ASSETS_FILE  = DATA_DIR / "post_assets.md"
-ASSETS_DIR        = DATA_DIR / "assets"
-SELECTION_FILE    = DATA_DIR / "selection_notes.md"
-
-
-# ---------------------------------------------------------------------------
-# Extract latest post from daily_articles.md
-# ---------------------------------------------------------------------------
-
-def extract_source_url(selection_notes: str) -> str:
-    """Extract the source URL from selection_notes.md, or empty string if not found."""
-    match = re.search(r"URL:\s*(https?://\S+)", selection_notes)
-    return match.group(1).strip() if match else ""
-
-
-def extract_latest_post(articles: str) -> tuple[str, str]:
-    """Returns (topic_title, post_text) for the most recent entry."""
-    blocks = re.split(r"\n---\n", articles)
-    for block in reversed(blocks):
-        block = block.strip()
-        if not block or block.startswith("# Daily"):
-            continue
-        title_match = re.search(r"^## \d{4}-\d{2}-\d{2} — (.+)$", block, re.MULTILINE)
-        title = title_match.group(1).strip() if title_match else "Untitled"
-        lines = [
-            l for l in block.splitlines()
-            if not l.startswith("## ") and not l.startswith("_Written:")
-        ]
-        return title, "\n".join(lines).strip()
-    return "Untitled", ""
+BRAND_FILE = DATA_DIR / "ow_brand_guidelines.md"
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +98,8 @@ FORMAT_SCHEMA = """{
 }"""
 
 
-def decide_format(client: anthropic.Anthropic, post_text: str, voice: str, brand: str) -> dict:
+def decide_format(client: anthropic.Anthropic, post_text: str, voice: str, brand: str,
+                  learnings: str) -> dict:
     brand_section = (
         f"## Personal Visual Style\n{brand}"
         if brand.strip() and "Fülle diese Datei" not in brand
@@ -133,6 +110,9 @@ def decide_format(client: anthropic.Anthropic, post_text: str, voice: str, brand
         {voice or "_Not provided._"}
 
         {brand_section}
+
+        ## Accumulated format learnings (apply to format & asset decisions)
+        {learnings or "_None yet._"}
 
         ## Post text
         {post_text}
@@ -234,10 +214,7 @@ def save_assets(title: str, fmt: str, rationale: str, post_text: str, assets: di
 
 def _save_image_bytes(data: bytes, title: str) -> Path:
     """Write raw image bytes to data/assets/ and return the path."""
-    ASSETS_DIR.mkdir(exist_ok=True)
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    slug = re.sub(r"[^a-z0-9]+", "-", title.lower())[:50].strip("-")
-    dest = ASSETS_DIR / f"{date_str}-{slug}.png"
+    dest = ASSETS_DIR / f"{datetime.now().strftime('%Y-%m-%d')}-{make_date_slug(title)}.png"
     dest.write_bytes(data)
     return dest
 
@@ -291,8 +268,7 @@ def _generate_dalle3(prompt: str, title: str) -> Path | None:
             n=1,
         )
         image_url = response.data[0].url
-        ASSETS_DIR.mkdir(exist_ok=True)
-        dest = ASSETS_DIR / f"{datetime.now().strftime('%Y-%m-%d')}-{re.sub(r'[^a-z0-9]+', '-', title.lower())[:50].strip('-')}.png"
+        dest = ASSETS_DIR / f"{datetime.now().strftime('%Y-%m-%d')}-{make_date_slug(title)}.png"
         ssl_ctx = ssl.create_default_context(cafile=certifi.where())
         with urllib.request.urlopen(image_url, context=ssl_ctx) as r:
             dest.write_bytes(r.read())
@@ -403,7 +379,8 @@ def run(client: anthropic.Anthropic | None = None, creative: bool = False) -> No
     articles   = read_file(DAILY_ARTICLES_FILE)
     voice      = read_file(VOICE_FILE)
     brand      = read_file(BRAND_FILE)
-    selection  = read_file(SELECTION_FILE)
+    selection  = read_file(SELECTION_NOTES_FILE)
+    learnings  = read_file(LEARNINGS_FILE)
     source_url = extract_source_url(selection)
     title, post_text = extract_latest_post(articles)
 
@@ -417,7 +394,7 @@ def run(client: anthropic.Anthropic | None = None, creative: bool = False) -> No
 
     # 1. Decide format + prepare assets
     print("\n  Deciding format and preparing assets (adaptive thinking)...")
-    decision = decide_format(client, post_text, voice, brand)
+    decision = decide_format(client, post_text, voice, brand, learnings)
     fmt    = decision.get("format", "text")
     assets = decision.get("assets", {})
 

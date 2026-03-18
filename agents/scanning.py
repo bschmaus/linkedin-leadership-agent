@@ -12,17 +12,16 @@ Run standalone:
     python -m agents.scanning
 """
 
-import re
 import sys
 import textwrap
 from datetime import datetime
+from pathlib import Path
 
 import anthropic
 import feedparser
 import requests
 
-# Allow running as `python -m agents.scanning` from project root
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import (
     RSS_FEEDS,
@@ -30,9 +29,11 @@ from config import (
     LEARNINGS_FILE,
     DAILY_ARTICLES_FILE,
     RESEARCH_NOTES_FILE,
+    BROWSER_HEADERS,
     read_file,
     ensure_data_dir,
 )
+from agents.utils import strip_html
 
 # Scanning uses Sonnet to keep costs down — Opus is reserved for reasoning-heavy agents
 MODEL = "claude-sonnet-4-6"
@@ -40,30 +41,16 @@ MODEL = "claude-sonnet-4-6"
 # Max characters of feed content to pass to Claude (keeps prompt cost reasonable)
 MAX_FEED_CHARS = 28_000
 
-# Mimic a real browser so feeds don't block us
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/rss+xml, application/xml, text/xml, */*",
-}
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def strip_html(text: str) -> str:
-    """Remove HTML tags and collapse whitespace."""
-    return " ".join(re.sub(r"<[^>]+>", " ", text).split())
-
 
 def fetch_feed(url: str) -> list[dict]:
     """Fetch a single RSS feed with browser headers. Returns list of entry dicts."""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=10)
         resp.raise_for_status()
         feed = feedparser.parse(resp.content)
         entries = []
@@ -91,7 +78,7 @@ def fetch_extra_source(url: str) -> str:
     Used when no RSS feed is available.
     """
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=10)
         resp.raise_for_status()
         # Extract text from <article>, <main>, or <body> tags
         text = strip_html(resp.text)

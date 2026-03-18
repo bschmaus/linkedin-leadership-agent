@@ -18,22 +18,22 @@ import re
 import sys
 import textwrap
 from datetime import datetime
+from pathlib import Path
 
 import anthropic
 
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import (
     MODEL,
-    DATA_DIR,
     DAILY_ARTICLES_FILE,
     SELECTION_NOTES_FILE,
     LEARNINGS_FILE,
+    POST_ASSETS_FILE,
     read_file,
     ensure_data_dir,
 )
-
-POST_ASSETS_FILE = DATA_DIR / "post_assets.md"
+from agents.utils import extract_latest_post
 
 
 # ---------------------------------------------------------------------------
@@ -119,28 +119,6 @@ def build_prompt(post_text: str, brief: str, assets_summary: str,
 
 
 # ---------------------------------------------------------------------------
-# Extract post text from daily_articles.md
-# ---------------------------------------------------------------------------
-
-def extract_latest_post_and_topic(articles: str) -> tuple[str, str]:
-    """Returns (topic_title, post_text) for the most recent entry."""
-    import re
-    blocks = re.split(r"\n---\n", articles)
-    for block in reversed(blocks):
-        block = block.strip()
-        if not block or block.startswith("# Daily"):
-            continue
-        title_match = re.search(r"^## \d{4}-\d{2}-\d{2} — (.+)$", block, re.MULTILINE)
-        title = title_match.group(1).strip() if title_match else "Untitled"
-        lines = [
-            l for l in block.splitlines()
-            if not l.startswith("## ") and not l.startswith("_Written:")
-        ]
-        return title, "\n".join(lines).strip()
-    return "Untitled", ""
-
-
-# ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
 
@@ -161,7 +139,7 @@ def run(client: anthropic.Anthropic | None = None) -> str:
     assets_summary  = read_file(POST_ASSETS_FILE)
     existing        = read_file(LEARNINGS_FILE)
 
-    topic, post_text = extract_latest_post_and_topic(articles)
+    topic, post_text = extract_latest_post(articles)
 
     if not post_text:
         print("  ⚠️  No post found in daily_articles.md. Run the full pipeline first.")
@@ -192,7 +170,7 @@ def run(client: anthropic.Anthropic | None = None) -> str:
 
     with client.messages.stream(
         model=MODEL,
-        max_tokens=1500,
+        max_tokens=3000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": prompt}],
     ) as stream:

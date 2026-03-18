@@ -7,7 +7,8 @@ Fully automated daily pipeline — no manual intervention required.
   2. Selection      — pick the best topic with adaptive thinking
   3. Article Writer — ghostwrite the LinkedIn post
   4. Poster         — choose format, generate typography card image
-  5. Assessment     — critique the post, update learnings for tomorrow
+  5. Red Team       — fact-check + client-lens critique; iterate up to 3×
+  6. Assessment     — critique the post, update learnings for tomorrow
 
 Human steps (outside this pipeline):
   • Post the finished text + image manually on LinkedIn
@@ -17,11 +18,12 @@ Usage:
     python orchestrator.py                         # full pipeline (default)
     python orchestrator.py --from scan             # restart from scanning
     python orchestrator.py --from write            # restart from article writer
+    python orchestrator.py --from redteam          # re-run red team + assessment only
     python orchestrator.py --only post             # regenerate image/assets only
     python orchestrator.py --only post --creative  # use DALL-E instead of typography card
     python orchestrator.py --only assess           # re-run assessment (e.g. after analytics upload)
 
-Available agent names: scan, select, write, post, assess
+Available agent names: scan, select, write, post, redteam, assess
 """
 
 import argparse
@@ -35,14 +37,15 @@ import anthropic
 # Allow running from project root
 sys.path.insert(0, str(Path(__file__).parent))
 
-from agents import scanning, selection, article_writer, poster, assessment
+from agents import scanning, selection, article_writer, poster, red_team, assessment
 
 AGENTS = [
-    ("scan",    "Scanning",        scanning.run),
-    ("select",  "Selection",       selection.run),
-    ("write",   "Article Writer",  article_writer.run),
-    ("post",    "Poster",          poster.run),
-    ("assess",  "Assessment",      assessment.run),
+    ("scan",     "Scanning",        scanning.run),
+    ("select",   "Selection",       selection.run),
+    ("write",    "Article Writer",  article_writer.run),
+    ("post",     "Poster",          poster.run),
+    ("redteam",  "Red Team",        red_team.run),
+    ("assess",   "Assessment",      assessment.run),
 ]
 
 AGENT_NAMES = [name for name, _, _ in AGENTS]

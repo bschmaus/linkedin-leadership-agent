@@ -7,6 +7,7 @@ for today's LinkedIn post.
 Reads  : data/research_notes.md   (candidates from the Scanning agent)
          data/daily_articles.md   (history — avoid repetition)
          data/learnings.md        (accumulated style & topic feedback)
+         data/voice.md            (author identity & audience — identity/audience sections only)
 Writes : data/selection_notes.md  (chosen topic + full brief for the Article Writer)
 
 Uses adaptive thinking — this is the reasoning-heavy judgement call in the pipeline.
@@ -18,10 +19,11 @@ Run standalone:
 import sys
 import textwrap
 from datetime import datetime
+from pathlib import Path
 
 import anthropic
 
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import (
     MODEL,
@@ -29,9 +31,11 @@ from config import (
     DAILY_ARTICLES_FILE,
     LEARNINGS_FILE,
     SELECTION_NOTES_FILE,
+    VOICE_FILE,
     read_file,
     ensure_data_dir,
 )
+from agents.utils import extract_author_context
 
 
 # ---------------------------------------------------------------------------
@@ -65,10 +69,16 @@ the designated fields.
 """
 
 
-def build_user_message(research: str, history: str, learnings: str) -> str:
+def build_user_message(research: str, history: str, learnings: str, author_context: str) -> str:
     today = datetime.now().strftime("%A, %B %d, %Y")
+    author_section = (
+        f"## Author Identity & Audience\n{author_context}"
+        if author_context else ""
+    )
     return textwrap.dedent(f"""
         Today is {today}.
+
+        {author_section}
 
         ## Accumulated Learnings & Style Feedback
         {learnings or "_None yet._"}
@@ -133,21 +143,22 @@ def run(client: anthropic.Anthropic | None = None) -> str:
 
     print("🎯 Selection Agent starting...")
 
-    research  = read_file(RESEARCH_NOTES_FILE)
-    history   = read_file(DAILY_ARTICLES_FILE)
-    learnings = read_file(LEARNINGS_FILE)
+    research       = read_file(RESEARCH_NOTES_FILE)
+    history        = read_file(DAILY_ARTICLES_FILE)
+    learnings      = read_file(LEARNINGS_FILE)
+    author_context = extract_author_context(read_file(VOICE_FILE))
 
     if not research.strip() or "_No research yet._" in research:
         print("  ⚠️  No research notes found. Run the Scanning agent first.")
         return ""
 
     print("\n  Selecting best topic with Claude (adaptive thinking)...\n")
-    user_message = build_user_message(research, history, learnings)
+    user_message = build_user_message(research, history, learnings, author_context)
 
     collected = []
     with client.messages.stream(
         model=MODEL,
-        max_tokens=2000,
+        max_tokens=3500,
         thinking={"type": "adaptive"},
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],

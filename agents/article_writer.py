@@ -15,22 +15,21 @@ Run standalone:
 import sys
 import textwrap
 from datetime import datetime
+from pathlib import Path
 
 import anthropic
 
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import (
     MODEL,
-    DATA_DIR,
     SELECTION_NOTES_FILE,
     LEARNINGS_FILE,
     DAILY_ARTICLES_FILE,
+    VOICE_FILE,
     read_file,
     ensure_data_dir,
 )
-
-VOICE_FILE = DATA_DIR / "voice.md"
 
 
 # ---------------------------------------------------------------------------
@@ -72,8 +71,13 @@ who thinks carefully, cares about the topic, and isn't performing expertise.
 """
 
 
-def build_user_message(selection: str, learnings: str, voice: str) -> str:
+def build_user_message(selection: str, learnings: str, voice: str,
+                       redteam_feedback: str = "") -> str:
     today = datetime.now().strftime("%A, %B %d, %Y")
+    redteam_section = (
+        f"\n        ## Red Team Feedback (mandatory — address every point)\n        {redteam_feedback}"
+        if redteam_feedback.strip() else ""
+    )
     return textwrap.dedent(f"""
         Today is {today}.
 
@@ -82,6 +86,7 @@ def build_user_message(selection: str, learnings: str, voice: str) -> str:
 
         ## Feedback from Past Posts (apply these lessons)
         {learnings or "_None yet._"}
+        {redteam_section}
 
         ## Article Brief
         {selection}
@@ -95,10 +100,32 @@ def build_user_message(selection: str, learnings: str, voice: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _replace_latest_entry(post: str, topic_title: str) -> None:
+    """Overwrite the most recent post entry — used during red team revision iterations."""
+    content = read_file(DAILY_ARTICLES_FILE)
+    idx = content.rfind("\n---\n")
+    base = content[:idx] if idx != -1 else content
+    today_str  = datetime.now().strftime("%Y-%m-%d")
+    timestamp  = datetime.now().strftime("%Y-%m-%d %H:%M")
+    entry = (
+        f"\n---\n\n"
+        f"## {today_str} — {topic_title}\n\n"
+        f"_Written: {timestamp} | Status: draft_\n\n"
+        f"{post}\n"
+    )
+    DAILY_ARTICLES_FILE.write_text(base + entry, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
 
-def run(client: anthropic.Anthropic | None = None) -> str:
+def run(client: anthropic.Anthropic | None = None,
+        redteam_feedback: str = "",
+        revision: bool = False) -> str:
     """
     Run the article writer agent. Returns the finished post as a string.
     Pass an existing Anthropic client or one will be created.
@@ -121,7 +148,7 @@ def run(client: anthropic.Anthropic | None = None) -> str:
     print("\n  Writing LinkedIn post with Claude...\n")
     print("-" * 60)
 
-    user_message = build_user_message(selection, learnings, voice)
+    user_message = build_user_message(selection, learnings, voice, redteam_feedback)
     collected = []
 
     with client.messages.stream(
@@ -144,19 +171,21 @@ def run(client: anthropic.Anthropic | None = None) -> str:
             topic_title = line.replace("## Selected Topic:", "").strip()
             break
 
-    # Append to daily_articles.md
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    entry = (
-        f"\n---\n\n"
-        f"## {today_str} — {topic_title}\n\n"
-        f"_Written: {timestamp} | Status: draft_\n\n"
-        f"{post}\n"
-    )
-    with open(DAILY_ARTICLES_FILE, "a", encoding="utf-8") as f:
-        f.write(entry)
-
-    print(f"  ✅ Post appended to {DAILY_ARTICLES_FILE}")
+    if revision:
+        _replace_latest_entry(post, topic_title)
+        print(f"  ✅ Post revised in {DAILY_ARTICLES_FILE}")
+    else:
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        entry = (
+            f"\n---\n\n"
+            f"## {today_str} — {topic_title}\n\n"
+            f"_Written: {timestamp} | Status: draft_\n\n"
+            f"{post}\n"
+        )
+        with open(DAILY_ARTICLES_FILE, "a", encoding="utf-8") as f:
+            f.write(entry)
+        print(f"  ✅ Post appended to {DAILY_ARTICLES_FILE}")
     return post
 
 
