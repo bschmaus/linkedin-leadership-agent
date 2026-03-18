@@ -20,11 +20,14 @@ flowchart TD
     ANALYTICS["📊 Analytics Upload\n(weekly Excel export)"]
     ASSESS["🔍 Assessment Agent\nclaude-opus-4-6"]
     LEARN["🧠 learnings.md\n(persistent memory)"]
+    VOICE["🗣️ voice.md\n(author persona)"]
 
     RSS --> SCAN
     LEARN --> SCAN
     LEARN --> SELECT
     LEARN --> WRITE
+    VOICE --> WRITE
+    VOICE --> POST
     SCAN -->|research_notes.md| SELECT
     SELECT -->|selection_notes.md| WRITE
     WRITE -->|daily_articles.md| POST
@@ -37,6 +40,7 @@ flowchart TD
     style HUMAN fill:#e8f4f8,stroke:#4a9ebe
     style ANALYTICS fill:#e8f4f8,stroke:#4a9ebe
     style LEARN fill:#fff3cd,stroke:#d4a017
+    style VOICE fill:#f0f0e8,stroke:#8a8a60
 ```
 
 The pipeline runs automatically every weekday at 06:47. The assessment agent runs every Friday at 21:05, after you've uploaded the weekly analytics export.
@@ -60,7 +64,7 @@ The pipeline runs automatically every weekday at 06:47. The assessment agent run
 ### 1. Clone and install
 
 ```bash
-git clone <your-repo>
+git clone https://github.com/bschmaus/linkedin-leadership-agent.git
 cd linkedin-leadership-agent
 pip3 install -r requirements.txt
 ```
