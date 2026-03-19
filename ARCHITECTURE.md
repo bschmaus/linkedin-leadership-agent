@@ -17,19 +17,19 @@ The key design insight: **writing quality compounds over time**. A single Claude
 Every agent communicates through files in `data/`. No agent calls another directly.
 
 ```
-RSS / web sources
-       │
+RSS / web sources                                      voice.md
+       │                                            (author persona)
        ▼
 ┌─────────────────┐    research_notes.md
 │  Scanning Agent │ ──────────────────────► ┌──────────────────┐
-│  (Sonnet 4.6)   │                         │ Selection Agent  │
+│  (Sonnet 4.6)   │                         │ Selection Agent  │◄── identity/audience
 └─────────────────┘                         │ (Opus 4.6+think) │
        ▲                                    └──────────────────┘
        │                                            │
        │                                   selection_notes.md
        │                                            │
        │                                            ▼
-       │                         ┌─────────────────────────────────┐
+       │                         ┌─────────────────────────────────┐◄── voice.md (full)
        │          ◄──── REVISE ──│      Article Writer             │
        │          (with critique)│      (Opus 4.6)                 │
        │                         └─────────────────────────────────┘
@@ -37,7 +37,7 @@ RSS / web sources
        │                                    daily_articles.md
        │                                            │
        │                                            ▼
-       │                         ┌─────────────────────────────────┐
+       │                         ┌─────────────────────────────────┐◄── voice.md (full)
        │          ◄──── REVISE ──│      Poster Agent               │──► image card (.png)
        │        (format flagged) │      (Opus 4.6+think)           │
        │                         └─────────────────────────────────┘
@@ -46,7 +46,7 @@ RSS / web sources
        │                                            │
        │                                            ▼
        │                         ┌─────────────────────────────────┐
-       │                         │  Red Team Agent                 │◄── live source fetch
+       │          ◄──── REVISE ──│      Red Team Agent             │◄── live source fetch
        │                         │  (Opus 4.6+think) max 3 iter.   │
        │                         └─────────────────────────────────┘
        │                                  │         │

@@ -10,35 +10,22 @@ A fully automated multi-agent pipeline that writes, formats, and critiques a dai
 
 ```mermaid
 flowchart TD
-    RSS["📡 RSS Feeds\n(FastCompany, HBR, MIT Sloan,\nOW Forum, Gallup)"]
-    SCAN["🔍 Scanning Agent\nclaude-sonnet-4-6"]
-    SELECT["🎯 Selection Agent\nclaude-opus-4-6 + adaptive thinking"]
-    WRITE["✍️ Article Writer\nclaude-opus-4-6"]
-    POST["📤 Poster Agent\nclaude-opus-4-6"]
-    IMAGE["🎨 Image Generator\nPillow / DALL-E 3"]
-    HUMAN["👤 Post on LinkedIn\n(manual)"]
-    ANALYTICS["📊 Analytics Upload\n(weekly Excel export)"]
-    ASSESS["🔍 Assessment Agent\nclaude-opus-4-6"]
-    LEARN["🧠 learnings.md\n(persistent memory)"]
-    VOICE["🗣️ voice.md\n(author persona)"]
+    RSS["📡 RSS Feeds"] --> SCAN
 
-    RSS --> SCAN
-    LEARN --> SCAN
-    LEARN --> SELECT
-    LEARN --> WRITE
-    VOICE --> WRITE
-    VOICE --> POST
-    SCAN -->|research_notes.md| SELECT
-    SELECT -->|selection_notes.md| WRITE
-    WRITE -->|daily_articles.md| POST
-    POST --> IMAGE
-    POST -->|post_assets.md| HUMAN
-    HUMAN -->|post performance| ANALYTICS
-    ANALYTICS --> ASSESS
-    ASSESS -->|learnings.md| LEARN
+    subgraph daily["Automated daily pipeline"]
+        SCAN["🔍 Scan"] --> SELECT["🎯 Select"]
+        SELECT --> WRITE["✍️ Write"]
+        WRITE --> RT["⚔️ Red Team\nup to 3 rounds"]
+        RT --> POST["📤 Format + Image"]
+    end
+
+    POST --> HUMAN["👤 Post on LinkedIn"]
+    HUMAN --> ASSESS["📊 Assess"]
+    ASSESS --> LEARN["🧠 learnings.md"]
+    LEARN -.->|informs| daily
+    VOICE["🗣️ voice.md"] -.->|persona| daily
 
     style HUMAN fill:#e8f4f8,stroke:#4a9ebe
-    style ANALYTICS fill:#e8f4f8,stroke:#4a9ebe
     style LEARN fill:#fff3cd,stroke:#d4a017
     style VOICE fill:#f0f0e8,stroke:#8a8a60
 ```
