@@ -29,15 +29,21 @@ BROWSER_HEADERS = {
 MODEL = "claude-opus-4-6"
 
 RSS_FEEDS = [
+    # English — US
     "https://www.fastcompany.com/leadership/rss",
     "https://sloanreview.mit.edu/feed/",
-    "https://hbr.org/feed",                            # Harvard Business Review
+    "https://knowledge.wharton.upenn.edu/feed/",       # Wharton — peer of HBR quality
+    "https://www.worklife.news/feed/",                 # Work Life News — future of work
+
+    # German-language
+    "https://www.personalwirtschaft.de/feed/",         # Personalwirtschaft — HR & leadership
 ]
 
-# Fallback: homepages to scrape when no RSS is available
+# Fallback: pages to scrape when no RSS is available
 EXTRA_SOURCES = [
     "https://www.oliverwymanforum.com",                # Oliver Wyman Forum (employer — good to reference)
     "https://www.gallup.com/workplace/insights.aspx",  # Gallup workplace research
+    "https://hbr.org/topic/subject/managing-people",   # HBR — killed RSS, scrape topic page instead
 ]
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
