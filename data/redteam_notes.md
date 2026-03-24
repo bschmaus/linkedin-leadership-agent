@@ -1,6 +1,6 @@
-# Red Team Notes — 2026-03-18 16:09
+# Red Team Notes — 2026-03-23 11:09
 
-## Post: The Hidden Cost That "Good" Workers Pay — and That Leaders Rarely See
+## Post: The Work Bestie Is a Structural Asset, Not a Perk
 
 ---
 

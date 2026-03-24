@@ -27,9 +27,11 @@ from config import (
     LEARNINGS_FILE,
     DAILY_ARTICLES_FILE,
     VOICE_FILE,
+    EMPTY_SELECTION,
     read_file,
     ensure_data_dir,
 )
+from agents.utils import replace_latest_entry, stream_to_stdout
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +52,10 @@ who thinks carefully, cares about the topic, and isn't performing expertise.
 - A moment of genuine uncertainty is more credible than false confidence.
 - It's okay to start a sentence with "And" or "But" when it fits.
 - The ending question should feel like genuine curiosity, not a fishing hook.
+- The closing CTA question MUST emerge from the post's own sharpest insight or
+  reframe — not from the brief's suggested CTA. The brief suggestion is a fallback,
+  not a default. Ask yourself: "What's the most specific question only THIS post
+  could ask?" If your CTA could fit any post on this topic, rewrite it.
 
 ## What kills the human feeling
 - Smooth, essay-style transitions ("This distinction matters.", "Therefore,")
@@ -59,7 +65,7 @@ who thinks carefully, cares about the topic, and isn't performing expertise.
 - Any sentence that could appear in a McKinsey deck without edits
 
 ## Hard rules
-- 250–400 words (not counting hashtags)
+- 250–360 words (not counting hashtags) — leave ~200 characters of headroom for the author's personal edits before publishing
 - No bullet-point listicles — flowing paragraphs only
 - No hollow phrases: "In today's fast-paced world", "As leaders, we must...",
   "It's more important than ever", "game-changer", "leverage", "synergy"
@@ -100,26 +106,6 @@ def build_user_message(selection: str, learnings: str, voice: str,
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _replace_latest_entry(post: str, topic_title: str) -> None:
-    """Overwrite the most recent post entry — used during red team revision iterations."""
-    content = read_file(DAILY_ARTICLES_FILE)
-    idx = content.rfind("\n---\n")
-    base = content[:idx] if idx != -1 else content
-    today_str  = datetime.now().strftime("%Y-%m-%d")
-    timestamp  = datetime.now().strftime("%Y-%m-%d %H:%M")
-    entry = (
-        f"\n---\n\n"
-        f"## {today_str} — {topic_title}\n\n"
-        f"_Written: {timestamp} | Status: draft_\n\n"
-        f"{post}\n"
-    )
-    DAILY_ARTICLES_FILE.write_text(base + entry, encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
 
@@ -141,28 +127,22 @@ def run(client: anthropic.Anthropic | None = None,
     learnings = read_file(LEARNINGS_FILE)
     voice     = read_file(VOICE_FILE)
 
-    if not selection.strip() or "_No selection yet._" in selection:
-        print("  ⚠️  No selection notes found. Run the Selection agent first.")
-        return ""
+    if not selection.strip() or EMPTY_SELECTION in selection:
+        raise RuntimeError("No selection notes found. Run the Selection agent first.")
 
     print("\n  Writing LinkedIn post with Claude...\n")
     print("-" * 60)
 
     user_message = build_user_message(selection, learnings, voice, redteam_feedback)
-    collected = []
 
-    with client.messages.stream(
+    post = stream_to_stdout(
+        client,
         model=MODEL,
         max_tokens=1500,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
-    ) as stream:
-        for text in stream.text_stream:
-            print(text, end="", flush=True)
-            collected.append(text)
-
-    print("\n" + "-" * 60 + "\n")
-    post = "".join(collected).strip()
+    )
+    print("-" * 60 + "\n")
 
     # Extract topic title from selection notes for the log header
     topic_title = "Untitled"
@@ -172,7 +152,7 @@ def run(client: anthropic.Anthropic | None = None,
             break
 
     if revision:
-        _replace_latest_entry(post, topic_title)
+        replace_latest_entry(post, topic_title, status="draft")
         print(f"  ✅ Post revised in {DAILY_ARTICLES_FILE}")
     else:
         today_str = datetime.now().strftime("%Y-%m-%d")

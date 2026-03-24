@@ -32,10 +32,11 @@ from config import (
     LEARNINGS_FILE,
     SELECTION_NOTES_FILE,
     VOICE_FILE,
+    EMPTY_RESEARCH,
     read_file,
     ensure_data_dir,
 )
-from agents.utils import extract_author_context
+from agents.utils import extract_author_context, extract_recent_history, stream_to_stdout
 
 
 # ---------------------------------------------------------------------------
@@ -144,31 +145,24 @@ def run(client: anthropic.Anthropic | None = None) -> str:
     print("🎯 Selection Agent starting...")
 
     research       = read_file(RESEARCH_NOTES_FILE)
-    history        = read_file(DAILY_ARTICLES_FILE)
+    history        = extract_recent_history(read_file(DAILY_ARTICLES_FILE), n=14)
     learnings      = read_file(LEARNINGS_FILE)
     author_context = extract_author_context(read_file(VOICE_FILE))
 
-    if not research.strip() or "_No research yet._" in research:
-        print("  ⚠️  No research notes found. Run the Scanning agent first.")
-        return ""
+    if not research.strip() or EMPTY_RESEARCH in research:
+        raise RuntimeError("No research notes found. Run the Scanning agent first.")
 
     print("\n  Selecting best topic with Claude (adaptive thinking)...\n")
     user_message = build_user_message(research, history, learnings, author_context)
 
-    collected = []
-    with client.messages.stream(
+    selection_output = stream_to_stdout(
+        client,
         model=MODEL,
         max_tokens=3500,
         thinking={"type": "adaptive"},
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
-    ) as stream:
-        for text in stream.text_stream:
-            print(text, end="", flush=True)
-            collected.append(text)
-
-    print("\n")
-    selection_output = "".join(collected)
+    )
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     notes = f"# Selection Notes — {timestamp}\n\n{selection_output}\n"

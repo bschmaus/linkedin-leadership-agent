@@ -1,13 +1,15 @@
-"""Shared configuration and file paths."""
+"""Shared configuration, file paths, and sentinel constants."""
 import os
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 BASE_DIR             = Path(__file__).parent
 DATA_DIR             = BASE_DIR / "data"
 ASSETS_DIR           = DATA_DIR / "assets"
+ARTICLES_ARCHIVE_DIR = DATA_DIR / "archive"
 
 LEARNINGS_FILE       = DATA_DIR / "learnings.md"
 DAILY_ARTICLES_FILE  = DATA_DIR / "daily_articles.md"
@@ -16,6 +18,14 @@ SELECTION_NOTES_FILE = DATA_DIR / "selection_notes.md"
 VOICE_FILE           = DATA_DIR / "voice.md"
 POST_ASSETS_FILE     = DATA_DIR / "post_assets.md"
 REDTEAM_NOTES_FILE   = DATA_DIR / "redteam_notes.md"
+BRAND_FILE           = DATA_DIR / "ow_brand_guidelines.md"
+
+# Sentinel strings used as placeholders in data files.
+# All guards should reference these constants — never hardcode the strings.
+EMPTY_LEARNINGS  = "_No learnings yet._"
+EMPTY_ARTICLES   = "_No articles yet._"
+EMPTY_RESEARCH   = "_No research yet._"
+EMPTY_SELECTION  = "_No selection yet._"
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -51,6 +61,10 @@ OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY")   # optional: DALL-E 3 (--creati
 GOOGLE_API_KEY    = os.getenv("GOOGLE_API_KEY")   # optional: Imagen 4 fallback (--creative mode)
 
 
+# ---------------------------------------------------------------------------
+# Low-level helpers (no agent dependencies — safe to import everywhere)
+# ---------------------------------------------------------------------------
+
 def read_file(path: Path) -> str:
     """Read a shared data file. Returns empty string if missing."""
     if path.exists():
@@ -58,15 +72,26 @@ def read_file(path: Path) -> str:
     return ""
 
 
+def parse_post_blocks(articles: str) -> list[str]:
+    """Split daily_articles.md content into individual post blocks.
+
+    Skips the file header and empty blocks. Used by utils.py helpers
+    and by rotate_articles_archive.
+    """
+    blocks = re.split(r"\n---\n", articles)
+    return [b for b in blocks if b.strip() and not b.strip().startswith("# Daily")]
+
+
 def ensure_data_dir() -> None:
     """Create data/ and initialise empty shared files if they don't exist."""
     DATA_DIR.mkdir(exist_ok=True)
     ASSETS_DIR.mkdir(exist_ok=True)
+    ARTICLES_ARCHIVE_DIR.mkdir(exist_ok=True)
     defaults = {
-        LEARNINGS_FILE:       "# Learnings & Improvements\n\n_No learnings yet._\n",
-        DAILY_ARTICLES_FILE:  "# Daily LinkedIn Articles\n\n_No articles yet._\n",
-        RESEARCH_NOTES_FILE:  "# Research Notes\n\n_No research yet._\n",
-        SELECTION_NOTES_FILE: "# Selection Notes\n\n_No selection yet._\n",
+        LEARNINGS_FILE:       f"# Learnings & Improvements\n\n{EMPTY_LEARNINGS}\n",
+        DAILY_ARTICLES_FILE:  f"# Daily LinkedIn Articles\n\n{EMPTY_ARTICLES}\n",
+        RESEARCH_NOTES_FILE:  f"# Research Notes\n\n{EMPTY_RESEARCH}\n",
+        SELECTION_NOTES_FILE: f"# Selection Notes\n\n{EMPTY_SELECTION}\n",
     }
     for path, content in defaults.items():
         if not path.exists():

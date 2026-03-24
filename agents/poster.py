@@ -42,12 +42,11 @@ from config import (
     ASSETS_DIR,
     GOOGLE_API_KEY,
     OPENAI_API_KEY,
+    BRAND_FILE,
     read_file,
     ensure_data_dir,
 )
-from agents.utils import extract_latest_post, extract_source_url, make_date_slug
-
-BRAND_FILE = DATA_DIR / "ow_brand_guidelines.md"
+from agents.utils import extract_latest_post, extract_source_url, make_date_slug, update_post_status, is_brand_configured
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +101,7 @@ def decide_format(client: anthropic.Anthropic, post_text: str, voice: str, brand
                   learnings: str) -> dict:
     brand_section = (
         f"## Personal Visual Style\n{brand}"
-        if brand.strip() and "Fülle diese Datei" not in brand
+        if is_brand_configured(brand)
         else "## Personal Visual Style\n_Not yet provided — use clean, modern editorial aesthetic._"
     )
     prompt = textwrap.dedent(f"""
@@ -342,19 +341,6 @@ def print_manual_instructions(post_text: str, fmt: str, assets: dict,
 
 
 # ---------------------------------------------------------------------------
-# Update status in daily_articles.md
-# ---------------------------------------------------------------------------
-
-def update_post_status(fmt: str) -> None:
-    content = read_file(DAILY_ARTICLES_FILE)
-    status = f"ready for manual posting | format: {fmt}"
-    updated = content[::-1].replace("tfarD :sutatS"[::-1], status[::-1], 1)[::-1]
-    if updated == content:
-        updated = content.replace("Status: draft", status, 1)
-    DAILY_ARTICLES_FILE.write_text(updated, encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
 
@@ -376,19 +362,17 @@ def run(client: anthropic.Anthropic | None = None, creative: bool = False) -> No
     mode_label = "creative (DALL-E)" if creative else "typography card (Pillow)"
     print(f"📤 Poster Agent starting... [image mode: {mode_label}]")
 
-    articles   = read_file(DAILY_ARTICLES_FILE)
     voice      = read_file(VOICE_FILE)
     brand      = read_file(BRAND_FILE)
     selection  = read_file(SELECTION_NOTES_FILE)
     learnings  = read_file(LEARNINGS_FILE)
     source_url = extract_source_url(selection)
-    title, post_text = extract_latest_post(articles)
+    title, post_text = extract_latest_post(read_file(DAILY_ARTICLES_FILE))
 
     if not post_text:
-        print("  ⚠️  No post found. Run the Article Writer agent first.")
-        return
+        raise RuntimeError("No post found. Run the Article Writer agent first.")
 
-    has_brand = brand.strip() and "Fülle diese Datei" not in brand
+    has_brand = is_brand_configured(brand)
     print(f"\n  Post  : {title}")
     print(f"  Brand : {'style guidelines loaded' if has_brand else 'using default style'}")
 
@@ -423,7 +407,7 @@ def run(client: anthropic.Anthropic | None = None, creative: bool = False) -> No
 
     # 4. Print manual instructions
     print_manual_instructions(post_text, fmt, assets, image_path, source_url)
-    update_post_status(fmt)
+    update_post_status(f"ready for manual posting | format: {fmt}")
 
 
 # ---------------------------------------------------------------------------

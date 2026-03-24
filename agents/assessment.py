@@ -7,8 +7,8 @@ structured learnings to learnings.md so future agents improve over time.
 Reads  : data/daily_articles.md   (the finished post)
          data/selection_notes.md  (the brief it was supposed to fulfil)
          data/post_assets.md      (format decision and assets)
-         data/learnings.md        (existing accumulated learnings)
-Writes : data/learnings.md        (appends new learnings entry)
+         data/learnings.md        (existing structured learnings)
+Writes : data/learnings.md        (maintains 3-layer structure: Prinzipien → Issues → Last Assessment → Archiv)
 
 Run standalone:
     python -m agents.assessment
@@ -30,10 +30,31 @@ from config import (
     SELECTION_NOTES_FILE,
     LEARNINGS_FILE,
     POST_ASSETS_FILE,
+    EMPTY_LEARNINGS,
     read_file,
     ensure_data_dir,
 )
-from agents.utils import extract_latest_post
+from agents.utils import extract_latest_post, stream_to_stdout
+
+
+# ---------------------------------------------------------------------------
+# Helpers: extract context sections from structured learnings.md
+# ---------------------------------------------------------------------------
+
+def extract_active_context(learnings: str) -> str:
+    """
+    Return only the sections the assessment agent needs:
+    Destillierte Prinzipien + Recurring Issues + Letztes Assessment.
+    Skip the Archiv to keep context window lean.
+    """
+    if not learnings or EMPTY_LEARNINGS in learnings:
+        return "_None yet._"
+
+    # Find the Archiv section and cut it off
+    archiv_match = re.search(r"^## Archiv", learnings, re.MULTILINE)
+    if archiv_match:
+        return learnings[:archiv_match.start()].strip()
+    return learnings.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -51,31 +72,13 @@ and concrete instructions for future agents.
 Tone: direct, collegial, constructive. Write as if briefing a skilled ghostwriter
 who wants to improve."""
 
-ASSESSMENT_SCHEMA = """\
-## Assessment: {topic}
-_Reviewed: {timestamp}_
-
-### What worked
-{what_worked}
-
-### What could be stronger
-{what_weaker}
-
-### Style & voice notes
-{style_notes}
-
-### Format decision
-{format_notes}
-
-### Instructions for future posts
-{future_instructions}
-
----
-"""
+CONSOLIDATION_SYSTEM = """You are maintaining a structured knowledge base for a LinkedIn content agent.
+Your job is to update learnings.md after each new post assessment.
+Be precise and concise. Update counters accurately. Compress fairly."""
 
 
-def build_prompt(post_text: str, brief: str, assets_summary: str,
-                 existing_learnings: str, analytics: str = "") -> str:
+def build_assessment_prompt(post_text: str, brief: str, assets_summary: str,
+                            active_context: str, analytics: str = "") -> str:
     analytics_section = (
         f"\n        ## Actual post performance (LinkedIn Analytics)\n        {analytics}\n"
         if analytics.strip() else ""
@@ -91,7 +94,7 @@ def build_prompt(post_text: str, brief: str, assets_summary: str,
         {assets_summary or "_No asset notes available._"}
         {analytics_section}
         ## Existing learnings (for context — do not repeat what's already captured)
-        {existing_learnings or "_None yet._"}
+        {active_context or "_None yet._"}
 
         ---
 
@@ -118,6 +121,45 @@ def build_prompt(post_text: str, brief: str, assets_summary: str,
     """).strip()
 
 
+def build_consolidation_prompt(current_learnings: str, new_assessment: str,
+                                topic: str, timestamp: str) -> str:
+    return textwrap.dedent(f"""
+        You are updating the structured learnings.md file after a new post assessment.
+
+        ## Current learnings.md content
+        {current_learnings}
+
+        ## New assessment to integrate
+        Topic: {topic}
+        Reviewed: {timestamp}
+
+        {new_assessment}
+
+        ---
+
+        Your task: rewrite the full learnings.md with these changes:
+
+        1. **## Letztes Assessment (vollständig)** — replace with the new assessment above (full text, including the ## Assessment header and _Reviewed_ line).
+
+        2. **## Recurring Issues** — update the table:
+           - If the new assessment flags an issue already in the table, increment its counter by 1 and update "Last flagged" to {timestamp[:10]}.
+           - If the new assessment flags a NEW issue not yet in the table, add a row.
+           - Update the Status emoji based on trajectory:
+             🔴 = unresolved / recurring
+             🟡 = partially resolved or watch
+             🟢 = resolved (not flagged in last 2 assessments)
+
+        3. **## Destillierte Prinzipien** — update ONLY if the new assessment reveals a genuinely new pattern not already captured. Do not add minor variations. Keep it stable and concise.
+
+        4. **## Archiv** — prepend a new compressed entry for the post that was previously in "Letztes Assessment". Format:
+           ### YYYY-MM-DD — "Topic title"
+           - [3 bullet points: one strength, one weakness, one style/voice note]
+
+        Output the complete updated learnings.md. Preserve the header comment block at the top exactly.
+        Do not add commentary before or after the file content.
+    """).strip()
+
+
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
@@ -137,18 +179,16 @@ def run(client: anthropic.Anthropic | None = None) -> str:
     articles        = read_file(DAILY_ARTICLES_FILE)
     brief           = read_file(SELECTION_NOTES_FILE)
     assets_summary  = read_file(POST_ASSETS_FILE)
-    existing        = read_file(LEARNINGS_FILE)
+    current_learnings = read_file(LEARNINGS_FILE)
 
     topic, post_text = extract_latest_post(articles)
 
     if not post_text:
-        print("  ⚠️  No post found in daily_articles.md. Run the full pipeline first.")
-        return ""
+        raise RuntimeError("No post found in daily_articles.md. Run the full pipeline first.")
 
     # Load analytics if available
     from agents.analytics_reader import load_latest_analytics, format_for_assessment
     analytics_data = load_latest_analytics()
-    # Extract the date of the LATEST post (findall returns all matches; take the last)
     all_dates = re.findall(r"## (\d{4}-\d{2}-\d{2})", articles)
     article_date = all_dates[-1] if all_dates else None
     analytics_text = format_for_assessment(analytics_data, article_date)
@@ -165,35 +205,63 @@ def run(client: anthropic.Anthropic | None = None) -> str:
     print(f"\n  Assessing: {topic}\n")
     print("-" * 60)
 
-    prompt = build_prompt(post_text, brief, assets_summary, existing, analytics_text)
-    collected = []
+    # Step 1: Generate the assessment (lean context — no Archiv)
+    active_context = extract_active_context(current_learnings)
+    assessment_prompt = build_assessment_prompt(
+        post_text, brief, assets_summary, active_context, analytics_text
+    )
 
-    with client.messages.stream(
+    assessment_body = stream_to_stdout(
+        client,
         model=MODEL,
         max_tokens=3000,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    ) as stream:
-        for text in stream.text_stream:
-            print(text, end="", flush=True)
-            collected.append(text)
+        messages=[{"role": "user", "content": assessment_prompt}],
+    )
+    print("-" * 60 + "\n")
 
-    print("\n" + "-" * 60 + "\n")
-    assessment_body = "".join(collected).strip()
-
-    # Build the full entry with header
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    entry = f"\n---\n\n## Assessment: {topic}\n_Reviewed: {timestamp}_\n\n{assessment_body}\n"
 
-    # Append to learnings.md
-    current = read_file(LEARNINGS_FILE)
-    if "_No learnings yet._" in current:
-        # Replace placeholder content
-        updated = f"# Learnings & Improvements\n{entry}"
+    # Step 2: Consolidate into structured learnings.md
+    print("  🔄 Consolidating learnings structure...")
+
+    if EMPTY_LEARNINGS in current_learnings or not current_learnings.strip():
+        # First-time initialisation: simple write
+        entry = (
+            f"# Learnings & Improvements\n\n"
+            f"---\n\n"
+            f"## Letztes Assessment (vollständig)\n\n"
+            f"## Assessment: {topic}\n_Reviewed: {timestamp}_\n\n{assessment_body}\n\n"
+            f"---\n\n## Archiv\n\n_No archived assessments yet._\n"
+        )
+        LEARNINGS_FILE.write_text(entry, encoding="utf-8")
     else:
-        updated = current.rstrip() + "\n" + entry
+        # Structured consolidation via Claude
+        consolidation_prompt = build_consolidation_prompt(
+            current_learnings, assessment_body, topic, timestamp
+        )
 
-    LEARNINGS_FILE.write_text(updated, encoding="utf-8")
+        updated = stream_to_stdout(
+            client,
+            verbose=False,
+            model=MODEL,
+            max_tokens=6000,
+            system=CONSOLIDATION_SYSTEM,
+            messages=[{"role": "user", "content": consolidation_prompt}],
+        )
+
+        # Safety check: ensure the file looks valid before writing
+        if "## Destillierte Prinzipien" in updated or "## Letztes Assessment" in updated:
+            LEARNINGS_FILE.write_text(updated, encoding="utf-8")
+        else:
+            # Fallback: simple append to avoid data loss
+            print("  ⚠️  Consolidation produced unexpected output — falling back to append.")
+            fallback = (
+                current_learnings.rstrip()
+                + f"\n\n---\n\n## Assessment: {topic}\n_Reviewed: {timestamp}_\n\n{assessment_body}\n"
+            )
+            LEARNINGS_FILE.write_text(fallback, encoding="utf-8")
+
     print(f"  ✅ Learnings updated in {LEARNINGS_FILE}")
 
     return assessment_body

@@ -50,7 +50,7 @@ from config import (
     read_file,
     ensure_data_dir,
 )
-from agents.utils import extract_latest_post, extract_source_url, strip_html
+from agents.utils import extract_latest_post, extract_source_url, strip_html, stream_to_stdout
 
 MAX_ITERATIONS   = 3
 SOURCE_MAX_CHARS = 6000   # chars of source article to pass as context
@@ -106,6 +106,23 @@ Flag anything that:
 - Delivers a conclusion the reader could have written themselves
 - Has a hook that doesn't earn the reader's commitment in the first two lines
 
+## Lens 3 — Brief compliance
+Verify the post delivers what the selection brief required. Specifically check:
+- **Source attribution**: Does the post name the correct author and article title
+  from the brief? Cross-check the brief's "Source to reference" section — a wrong
+  author name is an automatic REVISE.
+- **Facilitation / coaching technique**: If the brief asks for a specific method,
+  question, or practice — is one actually present? A concept label ("help people
+  articulate their reasoning") does NOT count. A described method with a who/what/when
+  DOES count.
+- **First-person professional example**: Is there at least one concrete, anonymised
+  professional example (not just abstract commentary)?
+- **CTA alignment**: Does the closing question emerge from the post's own sharpest
+  reframe — or is it a generic question that could belong to any post?
+
+Flag missing brief requirements as REVISE — these are the most persistent quality
+issues in the channel's history.
+
 ## Verdict
 Apply a HIGH bar. REVISE unless the post genuinely earns its place in a
 senior professional's feed. Approved posts should feel specific, credible,
@@ -119,6 +136,9 @@ Use EXACTLY this structure — no preamble, no commentary outside these sections
 
 ### Client perception issues
 [bullet points — or "None identified." if clean]
+
+### Brief compliance issues
+[bullet points — or "All requirements met." if clean]
 
 ### Verdict
 APPROVED or REVISE
@@ -247,17 +267,14 @@ def run(client: anthropic.Anthropic | None = None) -> str:
 
     print("🔴 Red Team Agent starting...")
 
-    # Load inputs
-    articles  = read_file(DAILY_ARTICLES_FILE)
+    # Load inputs (only extract latest post — not the full article history)
+    title, post_text = extract_latest_post(read_file(DAILY_ARTICLES_FILE))
     assets    = read_file(POST_ASSETS_FILE)
     brief     = read_file(SELECTION_NOTES_FILE)
     learnings = read_file(LEARNINGS_FILE)
     voice     = read_file(VOICE_FILE)
-
-    title, post_text = extract_latest_post(articles)
     if not post_text:
-        print("  ⚠️  No post found. Run the Article Writer agent first.")
-        return ""
+        raise RuntimeError("No post found. Run the Article Writer agent first.")
 
     # Fetch source article
     source_url = extract_source_url(brief)
@@ -282,10 +299,9 @@ def run(client: anthropic.Anthropic | None = None) -> str:
         print(f"  Red Team — Iteration {iteration}/{MAX_ITERATIONS}")
         print(f"{'─' * 60}\n")
 
-        # Reload post in case it was revised
+        # Reload only the latest post (not the full article history) after revision
         if iteration > 1:
-            articles = read_file(DAILY_ARTICLES_FILE)
-            _, post_text = extract_latest_post(articles)
+            _, post_text = extract_latest_post(read_file(DAILY_ARTICLES_FILE))
             assets = read_file(POST_ASSETS_FILE)
 
         prompt = build_critique_prompt(
@@ -293,20 +309,20 @@ def run(client: anthropic.Anthropic | None = None) -> str:
             learnings, voice, iteration, prior_feedback,
         )
 
-        collected = []
-        with client.messages.stream(
+        critique = stream_to_stdout(
+            client,
             model=MODEL,
             max_tokens=1500,
             thinking={"type": "adaptive"},
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
-        ) as stream:
-            for text in stream.text_stream:
-                print(text, end="", flush=True)
-                collected.append(text)
+        )
 
-        print("\n")
-        critique = "".join(collected).strip()
+        # Guard: empty critique (e.g. API timeout) — skip iteration, don't trigger false REVISE
+        if not critique:
+            print(f"  ⚠️  Iteration {iteration} returned empty critique — skipping")
+            break
+
         entries.append({"iteration": iteration, "critique": critique})
         save_redteam_notes(title, entries)
 

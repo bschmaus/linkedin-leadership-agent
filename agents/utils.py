@@ -3,7 +3,16 @@ Shared utilities used across multiple agents.
 """
 
 import re
+from datetime import datetime
 from html.parser import HTMLParser
+
+import anthropic
+
+from config import (
+    DAILY_ARTICLES_FILE,
+    parse_post_blocks,
+    read_file,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -12,11 +21,9 @@ from html.parser import HTMLParser
 
 def extract_latest_post(articles: str) -> tuple[str, str]:
     """Return (topic_title, post_text) for the most recent entry in daily_articles.md."""
-    blocks = re.split(r"\n---\n", articles)
-    for block in reversed(blocks):
+    posts = parse_post_blocks(articles)
+    for block in reversed(posts):
         block = block.strip()
-        if not block or block.startswith("# Daily"):
-            continue
         title_match = re.search(r"^## \d{4}-\d{2}-\d{2} — (.+)$", block, re.MULTILINE)
         title = title_match.group(1).strip() if title_match else "Untitled"
         lines = [
@@ -25,6 +32,86 @@ def extract_latest_post(articles: str) -> tuple[str, str]:
         ]
         return title, "\n".join(lines).strip()
     return "Untitled", ""
+
+
+def extract_recent_history(articles: str, n: int = 14) -> str:
+    """Return only the last *n* post entries from daily_articles.md.
+
+    Used for topic-deduplication context. Keeps the token footprint bounded
+    regardless of how many posts have accumulated over months.
+    """
+    posts = parse_post_blocks(articles)
+    recent = posts[-n:] if len(posts) > n else posts
+    return "\n---\n".join(recent)
+
+
+def extract_post_date(block: str) -> str | None:
+    """Extract the YYYY-MM-DD date from a post block header. Returns None if not found."""
+    match = re.search(r"^## (\d{4}-\d{2}-\d{2}) —", block.strip(), re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def replace_latest_entry(post_text: str, title: str, status: str = "draft") -> None:
+    """Overwrite the most recent entry in daily_articles.md.
+
+    Preserves the original post date from the existing entry to avoid
+    midnight date-drift. Used by article_writer (revision) and proofread.
+    """
+    content = read_file(DAILY_ARTICLES_FILE)
+    idx = content.rfind("\n---\n")
+    base = content[:idx] if idx != -1 else content
+
+    # Preserve original date from existing entry (avoid midnight drift)
+    existing_block = content[idx:] if idx != -1 else ""
+    original_date = extract_post_date(existing_block)
+    date_str = original_date or datetime.now().strftime("%Y-%m-%d")
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    entry = (
+        f"\n---\n\n"
+        f"## {date_str} — {title}\n\n"
+        f"_Written: {timestamp} | Status: {status}_\n\n"
+        f"{post_text}\n"
+    )
+    DAILY_ARTICLES_FILE.write_text(base + entry, encoding="utf-8")
+
+
+def update_post_status(new_status: str) -> None:
+    """Update the status field of the latest entry in daily_articles.md."""
+    content = read_file(DAILY_ARTICLES_FILE)
+    # Find the last "Status: ..." within a _Written: ... | Status: ..._ line
+    pattern = r"(Status: )[^_]+"
+    matches = list(re.finditer(pattern, content))
+    if not matches:
+        return
+    last = matches[-1]
+    updated = content[:last.start()] + f"Status: {new_status}" + content[last.end():]
+    DAILY_ARTICLES_FILE.write_text(updated, encoding="utf-8")
+
+
+def stream_to_stdout(client: anthropic.Anthropic, *, verbose: bool = True,
+                     **msg_kwargs) -> str:
+    """Stream a Claude response, optionally printing tokens in real time.
+
+    Accepts the same keyword arguments as ``client.messages.stream()``
+    (model, max_tokens, system, messages, thinking, …).
+
+    Returns the joined text output stripped of whitespace.
+    """
+    collected: list[str] = []
+    with client.messages.stream(**msg_kwargs) as stream:
+        for text in stream.text_stream:
+            if verbose:
+                print(text, end="", flush=True)
+            collected.append(text)
+    if verbose:
+        print("\n")
+    return "".join(collected).strip()
+
+
+def is_brand_configured(brand: str) -> bool:
+    """Return True if brand guidelines contain real content (not a placeholder)."""
+    return bool(brand.strip()) and "Fülle diese Datei" not in brand
 
 
 def extract_source_url(text: str) -> str:

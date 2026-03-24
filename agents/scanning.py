@@ -14,6 +14,7 @@ Run standalone:
 
 import sys
 import textwrap
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from pathlib import Path
 
@@ -33,13 +34,17 @@ from config import (
     read_file,
     ensure_data_dir,
 )
-from agents.utils import strip_html
+from agents.utils import strip_html, extract_recent_history, stream_to_stdout
 
 # Scanning uses Sonnet to keep costs down — Opus is reserved for reasoning-heavy agents
 MODEL = "claude-sonnet-4-6"
 
 # Max characters of feed content to pass to Claude (keeps prompt cost reasonable)
 MAX_FEED_CHARS = 28_000
+
+# Per-feed network timeout (seconds) and overall parallel fetch wall-clock limit
+FEED_TIMEOUT    = 12
+FETCH_WALL_TIME = 30
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +55,7 @@ MAX_FEED_CHARS = 28_000
 def fetch_feed(url: str) -> list[dict]:
     """Fetch a single RSS feed with browser headers. Returns list of entry dicts."""
     try:
-        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=10)
+        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=FEED_TIMEOUT)
         resp.raise_for_status()
         feed = feedparser.parse(resp.content)
         entries = []
@@ -78,9 +83,8 @@ def fetch_extra_source(url: str) -> str:
     Used when no RSS feed is available.
     """
     try:
-        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=10)
+        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=FEED_TIMEOUT)
         resp.raise_for_status()
-        # Extract text from <article>, <main>, or <body> tags
         text = strip_html(resp.text)
         return text[:3000]
     except Exception as exc:
@@ -88,37 +92,60 @@ def fetch_extra_source(url: str) -> str:
         return ""
 
 
+def _format_feed_section(url: str, entries: list[dict]) -> str:
+    source_domain = url.split("/")[2]
+    block = [f"### Source: {source_domain}"]
+    for e in entries:
+        block.append(f"**{e['title']}**")
+        if e["published"]:
+            block.append(f"_Published: {e['published']}_")
+        if e["link"]:
+            block.append(f"URL: {e['link']}")
+        if e["summary"]:
+            block.append(e["summary"])
+        block.append("")
+    return "\n".join(block)
+
+
 def fetch_all_content(feeds: list[str], extra: list[str]) -> str:
-    """Fetch RSS feeds + extra sources. Returns a formatted text block with full attribution."""
-    sections = []
+    """Fetch RSS feeds + extra sources in parallel. One slow source won't block others."""
+    results: dict[str, str] = {}
 
-    # --- RSS feeds ---
-    for url in feeds:
-        print(f"  📡 RSS: {url}")
-        entries = fetch_feed(url)
-        if not entries:
-            continue
-        source_domain = url.split("/")[2]
-        block = [f"### Source: {source_domain}"]
-        for e in entries:
-            block.append(f"**{e['title']}**")
-            if e["published"]:
-                block.append(f"_Published: {e['published']}_")
-            if e["link"]:
-                block.append(f"URL: {e['link']}")
-            if e["summary"]:
-                block.append(e["summary"])
-            block.append("")
-        sections.append("\n".join(block))
+    # Build task list: (label, kind, url)
+    tasks = [("rss", url) for url in feeds] + [("extra", url) for url in extra]
 
-    # --- Extra / non-RSS sources ---
-    for url in extra:
-        print(f"  🌐 Scraping: {url}")
-        text = fetch_extra_source(url)
-        if text.strip():
-            domain = url.split("/")[2]
-            sections.append(f"### Source: {domain}\nURL: {url}\n{text}")
+    def _fetch(kind: str, url: str) -> tuple[str, str]:
+        if kind == "rss":
+            entries = fetch_feed(url)
+            if entries:
+                return url, _format_feed_section(url, entries)
+            return url, ""
+        else:
+            text = fetch_extra_source(url)
+            if text.strip():
+                domain = url.split("/")[2]
+                return url, f"### Source: {domain}\nURL: {url}\n{text}"
+            return url, ""
 
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        future_to_url = {}
+        for kind, url in tasks:
+            label = "📡 RSS" if kind == "rss" else "🌐 Scraping"
+            print(f"  {label}: {url}")
+            future_to_url[executor.submit(_fetch, kind, url)] = url
+
+        for future in as_completed(future_to_url, timeout=FETCH_WALL_TIME):
+            try:
+                url, section = future.result(timeout=1)
+                if section:
+                    results[url] = section
+            except FuturesTimeoutError:
+                print(f"  ⚠️  Timed out (skipped): {future_to_url[future]}")
+            except Exception as exc:
+                print(f"  ⚠️  Error (skipped): {future_to_url[future]}: {exc}")
+
+    # Preserve original feed order
+    sections = [results[url] for _, url in tasks if url in results]
     combined = "\n\n".join(sections)
     return combined[:MAX_FEED_CHARS]
 
@@ -206,7 +233,7 @@ def run(client: anthropic.Anthropic | None = None) -> str:
 
     # 1. Load shared context files
     learnings       = read_file(LEARNINGS_FILE)
-    article_history = read_file(DAILY_ARTICLES_FILE)
+    article_history = extract_recent_history(read_file(DAILY_ARTICLES_FILE), n=14)
 
     # 2. Pull feeds + extra sources
     print("\n  Fetching content...")
@@ -219,19 +246,13 @@ def run(client: anthropic.Anthropic | None = None) -> str:
     print("\n  Analysing with Claude...\n")
     user_message = build_user_message(feed_content, learnings, article_history)
 
-    collected = []
-    with client.messages.stream(
+    research_output = stream_to_stdout(
+        client,
         model=MODEL,
         max_tokens=3000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
-    ) as stream:
-        for text in stream.text_stream:
-            print(text, end="", flush=True)
-            collected.append(text)
-
-    print("\n")
-    research_output = "".join(collected)
+    )
 
     # 4. Write research_notes.md (overwrite — fresh each day)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
