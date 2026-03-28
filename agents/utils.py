@@ -3,6 +3,7 @@ Shared utilities used across multiple agents.
 """
 
 import re
+import time
 from datetime import datetime
 from html.parser import HTMLParser
 
@@ -90,23 +91,37 @@ def update_post_status(new_status: str) -> None:
 
 
 def stream_to_stdout(client: anthropic.Anthropic, *, verbose: bool = True,
+                     retries: int = 2, retry_delay: float = 5.0,
                      **msg_kwargs) -> str:
     """Stream a Claude response, optionally printing tokens in real time.
 
     Accepts the same keyword arguments as ``client.messages.stream()``
     (model, max_tokens, system, messages, thinking, …).
 
+    Retries on transient network errors (e.g. [Errno 54] Connection reset by peer).
+
     Returns the joined text output stripped of whitespace.
     """
-    collected: list[str] = []
-    with client.messages.stream(**msg_kwargs) as stream:
-        for text in stream.text_stream:
+    last_exc: Exception | None = None
+    for attempt in range(1 + retries):
+        if attempt > 0:
+            print(f"\n  ⚠️  Network error, retrying ({attempt}/{retries})…")
+            time.sleep(retry_delay)
+        try:
+            collected: list[str] = []
+            with client.messages.stream(**msg_kwargs) as stream:
+                for text in stream.text_stream:
+                    if verbose:
+                        print(text, end="", flush=True)
+                    collected.append(text)
             if verbose:
-                print(text, end="", flush=True)
-            collected.append(text)
-    if verbose:
-        print("\n")
-    return "".join(collected).strip()
+                print("\n")
+            return "".join(collected).strip()
+        except Exception as exc:
+            last_exc = exc
+            if attempt == retries:
+                raise
+    raise last_exc  # unreachable, satisfies type checkers
 
 
 def is_brand_configured(brand: str) -> bool:
