@@ -85,9 +85,9 @@ FORMAT_SCHEMA = """{
 
     "image_brief": "what the image must convey — only if format=text_with_image",
 
-    "image_headline": "dominant stat or key phrase for the card, max 30 chars (e.g. '36 → 6' or '83%')",
+    "image_headline": "short phrase or stat, max 3 words / ~20 chars — e.g. 'Belief gap.', '83%', 'The real obstacle'; never a full sentence; must render on 1–2 lines",
     "image_subline":  "one-line descriptor beneath the headline, max 55 chars (e.g. 'months to develop a new product')",
-    "image_caption":  "supporting sentence, max 110 chars, can wrap to 2 lines (e.g. '83% faster — by moving decisions closer to the work')",
+    "image_caption":  "supporting sentence, max 80 chars / 1 line (e.g. '83% faster — by moving decisions closer to the work')",
 
     "image_prompt": "full DALL-E / Midjourney prompt for a CREATIVE visual — personal brand style, no company names or logos",
 

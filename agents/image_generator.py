@@ -64,18 +64,56 @@ def _vis(draw: ImageDraw.ImageDraw, text: str, font) -> tuple[int, int]:
 # Renderer
 # ---------------------------------------------------------------------------
 
+def _measure_content(
+    draw: ImageDraw.ImageDraw,
+    headline: str,
+    subline: str,
+    caption: str,
+    f_head: ImageFont.FreeTypeFont,
+    f_sub: ImageFont.FreeTypeFont,
+    f_cap: ImageFont.FreeTypeFont,
+    max_w: int,
+    spacing: dict,
+) -> tuple[int, list[str], list[str]]:
+    """Measure total VISUAL content height for a given headline font.
+
+    Uses bb[3]-bb[1] (true glyph height) so invisible font padding doesn't
+    distort the centre calculation — critical for multi-line headlines.
+
+    Returns (total_height, head_lines, cap_lines).
+    """
+    head_lines = _wrap(draw, headline, f_head, max_w)
+    cap_lines  = _wrap(draw, caption,  f_cap,  max_w) if caption else []
+
+    h = spacing["BAR_H"] + spacing["BAR_TO_HEAD"]
+    for i, ln in enumerate(head_lines):
+        vh, _ = _vis(draw, ln, f_head)
+        h += vh
+        if i < len(head_lines) - 1:
+            h += spacing["HEAD_LINE_GAP"]
+    h += spacing["HEAD_TO_DIV"] + spacing["DIV_H"] + spacing["DIV_TO_SUB"]
+    if subline:
+        vh, _ = _vis(draw, subline, f_sub)
+        h += vh + spacing["SUB_TO_CAP"]
+    for i, ln in enumerate(cap_lines):
+        vh, _ = _vis(draw, ln, f_cap)
+        h += vh
+        if i < len(cap_lines) - 1:
+            h += spacing["CAP_LINE_GAP"]
+
+    return h, head_lines, cap_lines
+
+
 def render_card(headline: str, subline: str, caption: str, dest: Path) -> Path:
     img  = Image.new("RGB", (W, H), NAVY)
     draw = ImageDraw.Draw(img)
 
-    f_head = _font("PlayfairDisplay-Black.ttf", 148)
+    head_size = 148
+    f_head = _font("PlayfairDisplay-Black.ttf", head_size)
     f_sub  = _font("NotoSans-Bold.ttf",          38)
     f_cap  = _font("NotoSans-Regular.ttf",        28)
 
     max_w = W - PAD * 2
-
-    head_lines = _wrap(draw, headline, f_head, max_w)
-    cap_lines  = _wrap(draw, caption,  f_cap,  max_w) if caption else []
 
     # Spacing constants
     BAR_H         = 8
@@ -87,24 +125,33 @@ def render_card(headline: str, subline: str, caption: str, dest: Path) -> Path:
     SUB_TO_CAP    = 18
     CAP_LINE_GAP  = 8
 
+    spacing = dict(
+        BAR_H=BAR_H, BAR_TO_HEAD=BAR_TO_HEAD, HEAD_LINE_GAP=HEAD_LINE_GAP,
+        HEAD_TO_DIV=HEAD_TO_DIV, DIV_H=DIV_H, DIV_TO_SUB=DIV_TO_SUB,
+        SUB_TO_CAP=SUB_TO_CAP, CAP_LINE_GAP=CAP_LINE_GAP,
+    )
+
     # --- Pass 1: measure VISUAL content height ---
-    # Uses bb[3]-bb[1] (true glyph height) so invisible font padding doesn't
-    # distort the centre calculation — critical for multi-line headlines.
-    h = BAR_H + BAR_TO_HEAD
-    for i, ln in enumerate(head_lines):
-        vh, _ = _vis(draw, ln, f_head)
-        h += vh
-        if i < len(head_lines) - 1:
-            h += HEAD_LINE_GAP
-    h += HEAD_TO_DIV + DIV_H + DIV_TO_SUB
-    if subline:
-        vh, _ = _vis(draw, subline, f_sub)
-        h += vh + SUB_TO_CAP
-    for i, ln in enumerate(cap_lines):
-        vh, _ = _vis(draw, ln, f_cap)
-        h += vh
-        if i < len(cap_lines) - 1:
-            h += CAP_LINE_GAP
+    h, head_lines, cap_lines = _measure_content(
+        draw, headline, subline, caption, f_head, f_sub, f_cap, max_w, spacing,
+    )
+
+    # --- Font-scaling overflow guard ---
+    # If total content height exceeds the canvas (with a 30px bottom reserve for
+    # the anchor bar), reduce the headline font size in 8px steps until it fits.
+    MIN_HEAD_SIZE    = 80
+    BOTTOM_RESERVE   = 30
+    max_content_h    = H - PAD - BOTTOM_RESERVE
+
+    while h > max_content_h and head_size > MIN_HEAD_SIZE:
+        head_size = max(head_size - 8, MIN_HEAD_SIZE)
+        f_head = _font("PlayfairDisplay-Black.ttf", head_size)
+        h, head_lines, cap_lines = _measure_content(
+            draw, headline, subline, caption, f_head, f_sub, f_cap, max_w, spacing,
+        )
+
+    if head_size < 148:
+        print(f"  ⚠️  Headline scaled down to {head_size}px to fit canvas")
 
     y_bar = max(PAD, (H - h) // 2)
 
