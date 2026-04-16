@@ -11,7 +11,9 @@ Writes : data/research_notes.md  (structured candidates for the Selection agent)
 Run standalone:
     python -m agents.scanning
 """
+from __future__ import annotations
 
+import random
 import sys
 import textwrap
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
@@ -144,8 +146,9 @@ def fetch_all_content(feeds: list[str], extra: list[str]) -> str:
             except Exception as exc:
                 print(f"  ⚠️  Error (skipped): {future_to_url[future]}: {exc}")
 
-    # Preserve original feed order
+    # Randomise source order to avoid position bias (first source gets more attention)
     sections = [results[url] for _, url in tasks if url in results]
+    random.shuffle(sections)
     combined = "\n\n".join(sections)
     return combined[:MAX_FEED_CHARS]
 
@@ -173,6 +176,9 @@ Guidelines:
 - Focus on actionable, timely insights with broad professional relevance
 - Avoid topics already covered in the article history
 - Incorporate style and topic feedback from past learnings
+- **Source diversity is essential.** Draw candidates from as many different sources
+  as possible. If you have 5 candidates, aim for 4-5 distinct source domains.
+  Never draw more than 2 candidates from the same source domain.
 - NEVER use McKinsey, BCG, Bain, PwC, EY, Deloitte, or KPMG as a source or reference —
   these are direct competitors; citing them would be inappropriate
 - Oliver Wyman Forum content is explicitly encouraged as a source

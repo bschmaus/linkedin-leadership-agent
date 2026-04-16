@@ -12,6 +12,7 @@ Writes : data/daily_articles.md   (overwrites latest entry with corrected text)
 Run standalone:
     python -m agents.proofread
 """
+from __future__ import annotations
 
 import sys
 from pathlib import Path

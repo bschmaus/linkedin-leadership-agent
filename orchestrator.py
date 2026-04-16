@@ -26,6 +26,7 @@ Usage:
 
 Available agent names: scan, select, write, post, redteam, assess
 """
+from __future__ import annotations
 
 import argparse
 import os

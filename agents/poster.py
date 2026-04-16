@@ -18,6 +18,7 @@ Writes : data/post_assets.md          (format decision + all assets for review)
 Run standalone:
     python -m agents.poster
 """
+from __future__ import annotations
 
 import json
 import re
@@ -56,45 +57,60 @@ from agents.utils import extract_latest_post, extract_source_url, make_date_slug
 FORMAT_SYSTEM = """You are a LinkedIn content strategist. Recommend the best post
 format for the content, then prepare all required assets.
 
-Available formats:
-- text            — pure text (default; great for analytical, reflective content)
-- poll            — text + 4-option poll (only when the closing question has
-                    genuinely distinct answerable options)
-- text_with_image — text + one visual (when a diagram or image strongly reinforces
-                    the hook or a key data point)
-- carousel        — multi-slide document (only for structured step-by-step content)
+Available formats and TARGET DISTRIBUTION (aim across ~20 posts, not rigid quota):
+- text_with_image  (~75%) — typography card with a sharp headline; default for
+                            reflective / analytical content
+- carousel         (~10%) — 6–8 slide document for structured content with 3–5
+                            distinct insights, a framework, or step-by-step flow
+- photo_briefing   (~10%) — author takes a personal photograph themselves;
+                            pick for personal, human, "moment in time" posts
+- poll             (~5%)  — only when the closing question has genuinely
+                            distinct answerable options
 
-For ANY format that involves a visual asset (text_with_image, carousel):
-- This is a PERSONAL brand — never include any company name, company logo, or
-  employer branding in visuals or prompts
-- Apply the personal visual style guidelines provided
-- If no style guidelines are available, use a clean, modern, editorial aesthetic:
-  dark navy or charcoal background, white headline typography, one warm accent
-  colour (gold or amber), minimal layout, no decorative flourishes
+**Important:** The channel has historically over-indexed on `text_with_image`.
+Prefer `carousel` or `photo_briefing` whenever the content genuinely supports it.
+Ask: does this post have a structured breakdown worth a carousel? Does the post
+describe a personal moment, place, or scene that a real photo would elevate?
+
+For ANY visual asset (text_with_image, carousel):
+- This is a PERSONAL brand — no company names, logos, or employer branding
+- Apply the Oliver Wyman visual style guidelines (Inter typography, OW Primary
+  Blue #2B6EF2, neutral greys, one accent colour per asset, max 10% accent area)
+- The typography card's colour scheme rotates automatically — do NOT specify it
 
 Output valid JSON only — no markdown fences, no commentary outside the JSON.
 """
 
 FORMAT_SCHEMA = """{
-  "format": "text | poll | text_with_image | carousel",
-  "rationale": "2-3 sentences on why this format fits",
+  "format": "text_with_image | carousel | photo_briefing | poll",
+  "rationale": "2-3 sentences on why this format fits (and why the channel hasn't used it recently, if applicable)",
   "assets": {
     "poll_question": "max 140 chars — only if format=poll",
     "poll_options": ["A", "B", "C", "D"],
     "poll_duration": "ONE_DAY | THREE_DAYS | ONE_WEEK | TWO_WEEKS",
 
-    "image_brief": "what the image must convey — only if format=text_with_image",
+    "image_headline": "ONLY if format=text_with_image — short phrase or stat, max 3 words / ~20 chars (e.g. 'Wrong bottleneck.', '83%', 'The real obstacle'). Must render on 1–2 lines.",
+    "image_subline":  "ONLY if format=text_with_image — one-line descriptor beneath headline, max 55 chars",
+    "image_caption":  "ONLY if format=text_with_image — supporting sentence, max 80 chars / 1 line",
 
-    "image_headline": "short phrase or stat, max 3 words / ~20 chars — e.g. 'Belief gap.', '83%', 'The real obstacle'; never a full sentence; must render on 1–2 lines",
-    "image_subline":  "one-line descriptor beneath the headline, max 55 chars (e.g. 'months to develop a new product')",
-    "image_caption":  "supporting sentence, max 80 chars / 1 line (e.g. '83% faster — by moving decisions closer to the work')",
+    "photo_subject":   "ONLY if format=photo_briefing — what the author should photograph (one concise phrase)",
+    "photo_context":   "ONLY if format=photo_briefing — where/when to shoot",
+    "photo_mood":      "ONLY if format=photo_briefing — mood/aesthetic (informal, natural light, not posed)",
+    "photo_framing":   "ONLY if format=photo_briefing — framing hint (landscape 4:3 or 16:9 for LinkedIn)",
 
-    "image_prompt": "full DALL-E / Midjourney prompt for a CREATIVE visual — personal brand style, no company names or logos",
-
-    "slide_count": 5,
-    "slides": [{"slide": 1, "heading": "...", "body": "..."}]
+    "slide_count": 7,
+    "slides": [
+      {"slide": 1, "role": "hook",         "heading": "Short punchy hook", "body": ""},
+      {"slide": 2, "role": "context",      "heading": "Why this matters now", "body": "One supporting sentence."},
+      {"slide": 3, "role": "insight",      "heading": "First insight headline", "body": "8–15 words supporting."},
+      {"slide": 4, "role": "insight",      "heading": "Second insight headline", "body": "8–15 words supporting."},
+      {"slide": 5, "role": "insight",      "heading": "Third insight headline", "body": "8–15 words supporting."},
+      {"slide": 6, "role": "implications", "heading": "What this means for leaders", "body": "2–3 handlungspunkte in einer Zeile."},
+      {"slide": 7, "role": "conclusion",   "heading": "Sharp closing statement", "body": ""}
+    ]
   }
-}"""
+}
+For carousel: each slide's heading max 8–15 words, body max 1–2 lines. role ∈ {hook, context, insight, implications, conclusion, signature}."""
 
 
 def decide_format(client: anthropic.Anthropic, post_text: str, voice: str, brand: str,
@@ -128,10 +144,10 @@ def decide_format(client: anthropic.Anthropic, post_text: str, voice: str, brand
         Return valid JSON only.
     """).strip()
 
+    # Format decision is structured JSON generation — Sonnet handles this cheaper than Opus.
     response = client.messages.create(
-        model=MODEL,
+        model="claude-sonnet-4-6",
         max_tokens=4000,
-        thinking={"type": "adaptive"},
         system=FORMAT_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -146,18 +162,18 @@ def decide_format(client: anthropic.Anthropic, post_text: str, voice: str, brand
 # ---------------------------------------------------------------------------
 
 def save_assets(title: str, fmt: str, rationale: str, post_text: str, assets: dict,
-                image_path: Path | None = None, source_url: str = "") -> None:
+                image_path: Path | None = None, carousel_paths: list[Path] | None = None,
+                scheme: str = "", source_url: str = "") -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [
         f"# Post Assets — {timestamp}",
         f"\n## Post: {title}",
         f"**Format:** {fmt}",
         f"**Rationale:** {rationale}",
-        "\n---\n",
-        "## Post Text\n",
-        post_text,
-        "\n---\n",
     ]
+    if scheme:
+        lines.append(f"**Colour scheme:** {scheme}")
+    lines += ["\n---\n", "## Post Text\n", post_text, "\n---\n"]
 
     if fmt == "poll":
         lines += [
@@ -170,29 +186,38 @@ def save_assets(title: str, fmt: str, rationale: str, post_text: str, assets: di
 
     elif fmt == "text_with_image":
         lines += [
-            "## Image Asset\n",
-            f"**Brief:** {assets.get('image_brief', '')}",
-            f"**Style:** {assets.get('image_style', '')}\n",
+            "## Image Asset (typography card)\n",
+            f"**Headline:** {assets.get('image_headline', '')}",
+            f"**Subline:**  {assets.get('image_subline', '')}",
+            f"**Caption:**  {assets.get('image_caption', '')}\n",
         ]
         if image_path:
             lines += [
                 f"**Generated image:** `{image_path}`",
                 "_Open this file to review before uploading to LinkedIn._\n",
             ]
-        else:
-            lines += [
-                "**Status:** Not auto-generated — use prompt below in DALL-E or Midjourney\n",
-            ]
-        lines += [
-            "**DALL-E / Midjourney prompt:**\n",
-            f"> {assets.get('image_prompt', '')}",
-        ]
 
     elif fmt == "carousel":
-        lines += [f"## Carousel ({assets.get('slide_count', '?')} slides)\n"]
+        slide_count = assets.get('slide_count', len(assets.get('slides', [])))
+        lines += [f"## Carousel ({slide_count} slides)\n"]
+        if carousel_paths:
+            lines.append(f"**Generated slides:** `{carousel_paths[0].parent}`")
+            lines.append("_Upload as a LinkedIn document (PDF) — combine the PNGs in order._\n")
         for slide in assets.get("slides", []):
-            lines.append(f"### Slide {slide['slide']}: {slide['heading']}")
+            lines.append(f"### Slide {slide.get('slide','?')}: {slide.get('heading','')}")
+            if slide.get("role"):
+                lines.append(f"_Role: {slide['role']}_")
             lines.append(slide.get("body", "") + "\n")
+
+    elif fmt == "photo_briefing":
+        lines += [
+            "## Photo Briefing — you take this one yourself\n",
+            f"**Subject:**  {assets.get('photo_subject', '')}",
+            f"**Context:**  {assets.get('photo_context', '')}",
+            f"**Mood:**     {assets.get('photo_mood', '')}",
+            f"**Framing:**  {assets.get('photo_framing', '')}\n",
+            "_Shoot it on your phone. Informal beats polished. Upload it directly to LinkedIn with the post text above._\n",
+        ]
 
     lines += [
         "\n---\n",
@@ -302,6 +327,7 @@ def generate_image_creative(prompt: str, title: str) -> Path | None:
 
 def print_manual_instructions(post_text: str, fmt: str, assets: dict,
                               image_path: Path | None = None,
+                              carousel_paths: list[Path] | None = None,
                               source_url: str = "") -> None:
     w = 68
     print("\n" + "═" * w)
@@ -323,14 +349,25 @@ def print_manual_instructions(post_text: str, fmt: str, assets: dict,
         if image_path:
             print(f"  ADD IMAGE: {image_path}")
         else:
-            print("  ADD IMAGE (see data/post_assets.md for full prompt):")
-            print(f"  Brief : {assets.get('image_brief', '')}")
-            print(f"  Style : {assets.get('image_style', '')}")
+            print("  ADD IMAGE: (no headline provided — see data/post_assets.md)")
 
     elif fmt == "carousel":
         print("─" * w)
-        print(f"  ADD CAROUSEL — {assets.get('slide_count', '?')} slides")
-        print("  (see data/post_assets.md for full slide content)")
+        count = len(carousel_paths) if carousel_paths else assets.get('slide_count', '?')
+        print(f"  ADD CAROUSEL — {count} slides")
+        if carousel_paths:
+            print(f"  Folder: {carousel_paths[0].parent}")
+            print("  Combine PNGs into a PDF and upload as a LinkedIn document.")
+        else:
+            print("  (see data/post_assets.md for slide texts)")
+
+    elif fmt == "photo_briefing":
+        print("─" * w)
+        print("  📸 TAKE THIS PHOTO YOURSELF:")
+        print(f"  Subject : {assets.get('photo_subject', '')}")
+        print(f"  Context : {assets.get('photo_context', '')}")
+        print(f"  Mood    : {assets.get('photo_mood', '')}")
+        print(f"  Framing : {assets.get('photo_framing', '')}")
 
     print("─" * w)
     if source_url:
@@ -385,28 +422,44 @@ def run(client: anthropic.Anthropic | None = None, creative: bool = False) -> No
     print(f"\n  ✦ Format: {fmt.upper()}")
     print(f"  {decision.get('rationale', '')}\n")
 
-    # 2. Generate image if needed
-    image_path = None
+    # 2. Generate visual asset based on format
+    image_path: Path | None = None
+    carousel_paths: list[Path] | None = None
+    scheme_used = ""
+
     if fmt == "text_with_image":
         if creative:
-            # Creative mode — AI-generated visual via DALL-E / Imagen
             image_path = generate_image_creative(assets.get("image_prompt", ""), title)
         else:
-            # Default mode — clean typography card rendered with Pillow
             from agents.image_generator import generate_card
             headline = assets.get("image_headline", title)
             subline  = assets.get("image_subline", "")
             caption  = assets.get("image_caption", "")
             if headline:
-                image_path = generate_card(headline, subline, caption, title)
+                image_path, scheme_used = generate_card(headline, subline, caption, title)
             else:
                 print("  ⚠️  No image_headline in assets — skipping card generation.")
 
+    elif fmt == "carousel":
+        from agents.image_generator import generate_carousel
+        slides = assets.get("slides", [])
+        if slides:
+            carousel_paths = generate_carousel(slides, title)
+        else:
+            print("  ⚠️  No slides in assets — skipping carousel generation.")
+
+    elif fmt == "photo_briefing":
+        print("  📸 Photo briefing prepared — take the photo yourself and upload it.")
+
     # 3. Save to post_assets.md
-    save_assets(title, fmt, decision.get("rationale", ""), post_text, assets, image_path, source_url)
+    save_assets(
+        title, fmt, decision.get("rationale", ""), post_text, assets,
+        image_path=image_path, carousel_paths=carousel_paths,
+        scheme=scheme_used, source_url=source_url,
+    )
 
     # 4. Print manual instructions
-    print_manual_instructions(post_text, fmt, assets, image_path, source_url)
+    print_manual_instructions(post_text, fmt, assets, image_path, carousel_paths, source_url)
     update_post_status(f"ready for manual posting | format: {fmt}")
 
 

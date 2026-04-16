@@ -1,6 +1,7 @@
 """
 Shared utilities used across multiple agents.
 """
+from __future__ import annotations
 
 import re
 import time
@@ -44,6 +45,30 @@ def extract_recent_history(articles: str, n: int = 14) -> str:
     posts = parse_post_blocks(articles)
     recent = posts[-n:] if len(posts) > n else posts
     return "\n---\n".join(recent)
+
+
+def extract_source_frequency(articles: str, n: int = 14) -> str:
+    """Count source domains across the last *n* posts.
+
+    Scans for **Source domain:** or **Domain:** lines in daily_articles.md
+    and returns a human-readable frequency summary for the Selection agent.
+    """
+    posts = parse_post_blocks(articles)
+    recent = posts[-n:] if len(posts) > n else posts
+    domain_counts: dict[str, int] = {}
+    for block in recent:
+        # Match patterns like "**Source domain:** fastcompany.com" or "Domain: mit.edu"
+        matches = re.findall(r"(?:Source domain|Domain):\s*\**\s*(\S+)", block, re.IGNORECASE)
+        for domain in matches:
+            domain = domain.strip("*").strip("_").strip().lower()
+            if domain:
+                domain_counts[domain] = domain_counts.get(domain, 0) + 1
+    if not domain_counts:
+        return ""
+    # Sort by count descending
+    ranked = sorted(domain_counts.items(), key=lambda x: -x[1])
+    lines = [f"- {domain}: {count}x" for domain, count in ranked]
+    return "\n".join(lines)
 
 
 def extract_post_date(block: str) -> str | None:

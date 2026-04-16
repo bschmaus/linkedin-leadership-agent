@@ -1,4 +1,6 @@
 """Shared configuration, file paths, and sentinel constants."""
+from __future__ import annotations
+
 import os
 import re
 from pathlib import Path
