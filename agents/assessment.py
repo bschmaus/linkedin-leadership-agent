@@ -13,6 +13,7 @@ Writes : data/learnings.md        (maintains 3-layer structure: Prinzipien → I
 Run standalone:
     python -m agents.assessment
 """
+from __future__ import annotations
 
 import re
 import sys
@@ -61,102 +62,71 @@ def extract_active_context(learnings: str) -> str:
 # Prompts
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are a thoughtful editorial coach reviewing LinkedIn posts for a senior
-professional. Your job is to assess post quality and extract
-actionable lessons that will make future posts better.
+SYSTEM_PROMPT = """You are an editorial coach and knowledge base maintainer for a LinkedIn content agent.
+Complete two tasks in a single response.
 
-Be honest and specific. Vague praise is useless. Vague criticism is useless.
-Focus on what was done well (so it gets repeated), what missed (so it gets fixed),
-and concrete instructions for future agents.
+## Task 1 — Post Assessment
+Assess the post against its brief. Be honest and specific — vague praise or criticism is useless.
+Focus on what worked (so it repeats), what missed (so it gets fixed), and concrete rules for future agents.
+Tone: direct, collegial. Write as if briefing a skilled ghostwriter who wants to improve.
 
-Tone: direct, collegial, constructive. Write as if briefing a skilled ghostwriter
-who wants to improve."""
+Structure the assessment with these sections (2–4 bullets each):
+### What worked / ### What could be stronger / ### Style & voice notes / ### Format decision / ### Instructions for future posts
 
-CONSOLIDATION_SYSTEM = """You are maintaining a structured knowledge base for a LinkedIn content agent.
-Your job is to update learnings.md after each new post assessment.
-Be precise and concise. Update counters accurately. Compress fairly."""
+## Task 2 — Learnings Update
+Rewrite the full learnings.md with these changes:
+1. **## Letztes Assessment** — replace with the new assessment (full text, with ## Assessment header and _Reviewed_ line).
+2. **## Recurring Issues** — update the table: increment counter for flagged issues, add new rows, update Status emoji (🔴 unresolved, 🟡 watch, 🟢 resolved not flagged in last 2).
+3. **## Destillierte Prinzipien** — update ONLY for genuinely new patterns. Keep stable and concise.
+4. **## Archiv** — prepend a compressed entry for the post previously in "Letztes Assessment" (3 bullets: strength, weakness, style note).
+
+Preserve the header comment block at the top of learnings.md exactly.
+
+## Output format — use these exact delimiters, no content outside them:
+
+<assessment>
+[assessment markdown]
+</assessment>
+
+<learnings>
+[complete updated learnings.md]
+</learnings>
+"""
 
 
-def build_assessment_prompt(post_text: str, brief: str, assets_summary: str,
-                            active_context: str, analytics: str = "") -> str:
+def _extract_tag(text: str, tag: str) -> str:
+    """Extract content between <tag>...</tag> delimiters."""
+    match = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
+    return match.group(1).strip() if match else ""
+
+
+def build_merged_prompt(post_text: str, brief: str, assets_summary: str,
+                        current_learnings: str, topic: str, timestamp: str,
+                        analytics: str = "") -> str:
     analytics_section = (
-        f"\n        ## Actual post performance (LinkedIn Analytics)\n        {analytics}\n"
+        f"\n## Actual post performance (LinkedIn Analytics)\n{analytics}\n"
         if analytics.strip() else ""
     )
     return textwrap.dedent(f"""
-        ## The brief (what we were trying to achieve)
+        ## The brief
         {brief or "_No brief available._"}
 
-        ## The post that was written
+        ## The post
         {post_text or "_No post available._"}
 
         ## Format decision & assets
         {assets_summary or "_No asset notes available._"}
         {analytics_section}
-        ## Existing learnings (for context — do not repeat what's already captured)
-        {active_context or "_None yet._"}
+        ## Current learnings.md
+        {current_learnings or "_None yet._"}
 
         ---
 
-        Please assess the post against the brief. Structure your response as valid markdown
-        using EXACTLY this format (fill in each section — use 2–4 bullet points per section):
-
-        ### What worked
-        - [specific strength]
-
-        ### What could be stronger
-        - [specific gap or missed opportunity]
-
-        ### Style & voice notes
-        - [observations on tone, rhythm, authenticity, word choice]
-
-        ### Format decision
-        - [was the format (text / poll / image / carousel) right for this content?]
-
-        ### Instructions for future posts
-        - [actionable rule: "Always...", "Never...", "When the post is about X, do Y"]
-
-        Be concrete. Reference specific lines or phrases from the post where helpful.
-        {"If analytics data is available, ground your conclusions in the actual numbers." if analytics.strip() else ""}
-    """).strip()
-
-
-def build_consolidation_prompt(current_learnings: str, new_assessment: str,
-                                topic: str, timestamp: str) -> str:
-    return textwrap.dedent(f"""
-        You are updating the structured learnings.md file after a new post assessment.
-
-        ## Current learnings.md content
-        {current_learnings}
-
-        ## New assessment to integrate
         Topic: {topic}
         Reviewed: {timestamp}
 
-        {new_assessment}
-
-        ---
-
-        Your task: rewrite the full learnings.md with these changes:
-
-        1. **## Letztes Assessment (vollständig)** — replace with the new assessment above (full text, including the ## Assessment header and _Reviewed_ line).
-
-        2. **## Recurring Issues** — update the table:
-           - If the new assessment flags an issue already in the table, increment its counter by 1 and update "Last flagged" to {timestamp[:10]}.
-           - If the new assessment flags a NEW issue not yet in the table, add a row.
-           - Update the Status emoji based on trajectory:
-             🔴 = unresolved / recurring
-             🟡 = partially resolved or watch
-             🟢 = resolved (not flagged in last 2 assessments)
-
-        3. **## Destillierte Prinzipien** — update ONLY if the new assessment reveals a genuinely new pattern not already captured. Do not add minor variations. Keep it stable and concise.
-
-        4. **## Archiv** — prepend a new compressed entry for the post that was previously in "Letztes Assessment". Format:
-           ### YYYY-MM-DD — "Topic title"
-           - [3 bullet points: one strength, one weakness, one style/voice note]
-
-        Output the complete updated learnings.md. Preserve the header comment block at the top exactly.
-        Do not add commentary before or after the file content.
+        {"Ground your assessment conclusions in the actual analytics numbers." if analytics.strip() else ""}
+        Complete Task 1 and Task 2 now.
     """).strip()
 
 
@@ -205,28 +175,36 @@ def run(client: anthropic.Anthropic | None = None) -> str:
     print(f"\n  Assessing: {topic}\n")
     print("-" * 60)
 
-    # Step 1: Generate the assessment (lean context — no Archiv)
-    active_context = extract_active_context(current_learnings)
-    assessment_prompt = build_assessment_prompt(
-        post_text, brief, assets_summary, active_context, analytics_text
-    )
-
-    assessment_body = stream_to_stdout(
-        client,
-        model=MODEL,
-        max_tokens=3000,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": assessment_prompt}],
-    )
-    print("-" * 60 + "\n")
-
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    # Step 2: Consolidate into structured learnings.md
-    print("  🔄 Consolidating learnings structure...")
-
     if EMPTY_LEARNINGS in current_learnings or not current_learnings.strip():
-        # First-time initialisation: simple write
+        # First-time initialisation: assessment only (no existing structure to update)
+        analytics_section = (
+            f"\n## Actual post performance\n{analytics_text}\n" if analytics_text.strip() else ""
+        )
+        first_run_prompt = textwrap.dedent(f"""
+            ## The brief
+            {brief or "_No brief available._"}
+
+            ## The post
+            {post_text or "_No post available._"}
+
+            ## Format decision & assets
+            {assets_summary or "_No asset notes available._"}
+            {analytics_section}
+            ---
+
+            Assess the post against the brief (2–4 bullets per section):
+            ### What worked / ### What could be stronger / ### Style & voice notes / ### Format decision / ### Instructions for future posts
+        """).strip()
+        assessment_body = stream_to_stdout(
+            client,
+            model=MODEL,
+            max_tokens=3000,
+            system="You are a thoughtful editorial coach reviewing LinkedIn posts. Be honest and specific. Tone: direct, collegial.",
+            messages=[{"role": "user", "content": first_run_prompt}],
+        )
+        print("-" * 60 + "\n")
         entry = (
             f"# Learnings & Improvements\n\n"
             f"---\n\n"
@@ -236,29 +214,35 @@ def run(client: anthropic.Anthropic | None = None) -> str:
         )
         LEARNINGS_FILE.write_text(entry, encoding="utf-8")
     else:
-        # Structured consolidation via Claude
-        consolidation_prompt = build_consolidation_prompt(
-            current_learnings, assessment_body, topic, timestamp
+        # Single merged call: assessment + learnings update in one shot
+        merged_prompt = build_merged_prompt(
+            post_text, brief, assets_summary, current_learnings, topic, timestamp, analytics_text
         )
-
-        updated = stream_to_stdout(
+        raw_output = stream_to_stdout(
             client,
             verbose=False,
             model=MODEL,
-            max_tokens=6000,
-            system=CONSOLIDATION_SYSTEM,
-            messages=[{"role": "user", "content": consolidation_prompt}],
+            max_tokens=8000,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": merged_prompt}],
         )
 
-        # Safety check: ensure the file looks valid before writing
-        if "## Destillierte Prinzipien" in updated or "## Letztes Assessment" in updated:
-            LEARNINGS_FILE.write_text(updated, encoding="utf-8")
+        assessment_body = _extract_tag(raw_output, "assessment")
+        updated_learnings = _extract_tag(raw_output, "learnings")
+
+        if assessment_body:
+            print(assessment_body)
+        print("-" * 60 + "\n")
+
+        print("  🔄 Updating learnings structure...")
+        if updated_learnings and ("## Destillierte Prinzipien" in updated_learnings or "## Letztes Assessment" in updated_learnings):
+            LEARNINGS_FILE.write_text(updated_learnings, encoding="utf-8")
         else:
-            # Fallback: simple append to avoid data loss
-            print("  ⚠️  Consolidation produced unexpected output — falling back to append.")
+            # Fallback: append assessment to avoid data loss
+            print("  ⚠️  Could not parse learnings from output — falling back to append.")
             fallback = (
                 current_learnings.rstrip()
-                + f"\n\n---\n\n## Assessment: {topic}\n_Reviewed: {timestamp}_\n\n{assessment_body}\n"
+                + f"\n\n---\n\n## Assessment: {topic}\n_Reviewed: {timestamp}_\n\n{assessment_body or raw_output}\n"
             )
             LEARNINGS_FILE.write_text(fallback, encoding="utf-8")
 

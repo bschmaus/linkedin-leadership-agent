@@ -11,6 +11,7 @@ Writes : data/daily_articles.md   (appends today's post with metadata)
 Run standalone:
     python -m agents.article_writer
 """
+from __future__ import annotations
 
 import sys
 import textwrap
@@ -31,49 +32,43 @@ from config import (
     read_file,
     ensure_data_dir,
 )
-from agents.utils import replace_latest_entry, stream_to_stdout
+from agents.utils import replace_latest_entry, extract_source_url, stream_to_stdout
 
 
 # ---------------------------------------------------------------------------
 # Prompts
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are a ghostwriter for a senior professional who wants to
-sound like themselves — not like a consultant, not like a TED talk, not like HBR.
+SYSTEM_PROMPT = """You are a ghostwriter for a senior professional who wants to sound like
+themselves — not like a consultant, not like a TED talk, not like HBR.
 
-Your job is to write a LinkedIn post that feels like it was written by a real person
-who thinks carefully, cares about the topic, and isn't performing expertise.
-
-## What makes it feel human
-- Sentence rhythm that breathes: mix short punchy sentences with longer ones.
-  One sentence can be four words. Let it sit.
-- Name the tension before you resolve it. Good thinking acknowledges complexity.
-- One small, concrete detail or scenario that makes the abstract feel real.
-- A moment of genuine uncertainty is more credible than false confidence.
-- It's okay to start a sentence with "And" or "But" when it fits.
-- The ending question should feel like genuine curiosity, not a fishing hook.
-- The closing CTA question MUST emerge from the post's own sharpest insight or
-  reframe — not from the brief's suggested CTA. The brief suggestion is a fallback,
-  not a default. Ask yourself: "What's the most specific question only THIS post
-  could ask?" If your CTA could fit any post on this topic, rewrite it.
+## Voice
+- Mix short punchy sentences with longer ones. One sentence can be four words. Let it sit.
+- Name the tension before resolving it. A moment of genuine uncertainty beats false confidence.
+- One concrete detail or scenario that makes the abstract real.
+- CTA question MUST emerge from this post's sharpest insight — not the brief's suggestion.
+  Ask: "What's the most specific question only THIS post could ask?" Generic CTA = rewrite it.
 
 ## What kills the human feeling
-- Smooth, essay-style transitions ("This distinction matters.", "Therefore,")
-- Building to a polished conclusion — real thinking has edges
-- Abstract nouns stacked on each other (organisational leadership capability frameworks)
-- Sounding like you have all the answers
+- Smooth transitions ("This distinction matters.", "Therefore,") and polished conclusions
+- Abstract noun stacks (organisational leadership capability frameworks)
 - Any sentence that could appear in a McKinsey deck without edits
 
+## Framing direction — hin zu, not weg von
+- Lead with the positive alternative: what becomes possible, what the better version looks like.
+- Critique is the *enabler*, not the argument. "When you build toward X, Y naturally falls away" — not "Y is broken, let's fix it."
+- Never open with or centre on what's broken. Centre on what opens up.
+- Test: could the post be summarised as "more X, more Y" rather than "less A, less B"? If not, reframe.
+
 ## Hard rules
-- 250–360 words (not counting hashtags) — leave ~200 characters of headroom for the author's personal edits before publishing
+- 200–290 words (not counting hashtags)
 - No bullet-point listicles — flowing paragraphs only
-- No hollow phrases: "In today's fast-paced world", "As leaders, we must...",
-  "It's more important than ever", "game-changer", "leverage", "synergy"
+- No hollow phrases: "In today's fast-paced world", "As leaders, we must...", "game-changer", "leverage", "synergy"
 - No unverifiable first-person claims ("I've seen...", "In my experience...")
 - Do not invent statistics — only use figures from the brief
-- Never mention the author's employer or any company name they work for
+- Never mention the author's employer or any company name
 - 5 hashtags at the very end
-- Output the post text ONLY — no title, no "Here's the post:", no commentary
+- Output the post text ONLY — no title, no commentary
 """
 
 
@@ -151,16 +146,26 @@ def run(client: anthropic.Anthropic | None = None,
             topic_title = line.replace("## Selected Topic:", "").strip()
             break
 
+    # Extract source domain from selection notes for tracking
+    import re as _re
+    source_domain = ""
+    for line in selection.splitlines():
+        m = _re.search(r"\*\*(?:Source )?[Dd]omain:\*\*\s*(\S+)", line)
+        if m:
+            source_domain = m.group(1).strip("*").strip()
+            break
+
     if revision:
         replace_latest_entry(post, topic_title, status="draft")
         print(f"  ✅ Post revised in {DAILY_ARTICLES_FILE}")
     else:
         today_str = datetime.now().strftime("%Y-%m-%d")
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        source_tag = f" | Source domain: {source_domain}" if source_domain else ""
         entry = (
             f"\n---\n\n"
             f"## {today_str} — {topic_title}\n\n"
-            f"_Written: {timestamp} | Status: draft_\n\n"
+            f"_Written: {timestamp} | Status: draft{source_tag}_\n\n"
             f"{post}\n"
         )
         with open(DAILY_ARTICLES_FILE, "a", encoding="utf-8") as f:

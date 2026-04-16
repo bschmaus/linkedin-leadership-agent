@@ -15,6 +15,7 @@ Uses adaptive thinking — this is the reasoning-heavy judgement call in the pip
 Run standalone:
     python -m agents.selection
 """
+from __future__ import annotations
 
 import sys
 import textwrap
@@ -36,7 +37,7 @@ from config import (
     read_file,
     ensure_data_dir,
 )
-from agents.utils import extract_author_context, extract_recent_history, stream_to_stdout
+from agents.utils import extract_author_context, extract_recent_history, extract_source_frequency, stream_to_stdout
 
 
 # ---------------------------------------------------------------------------
@@ -57,8 +58,17 @@ Selection criteria (in order of priority):
    • Individual leadership
    • Team collaboration / co-creation / self-organisation
    • Coaching & facilitation techniques
-4. Depth potential — enough substance for a 250-400 word LinkedIn post
-5. Source quality — grounded in a real, citable article
+4. Source diversity — check the source frequency data below. If one source
+   (e.g. fastcompany.com) has been used 3+ times recently, **strongly prefer**
+   a candidate from an underrepresented source, even if the overused source's
+   candidate is slightly stronger editorially. Source balance matters for
+   credibility and breadth of perspective.
+5. Depth potential — enough substance for a 200–290 word LinkedIn post
+6. Source quality — grounded in a real, citable article
+7. Positive framing potential — prefer candidates where a concrete positive alternative exists
+   (what becomes possible, what the better version looks like). If the only available angle
+   is "X is broken / should be abolished", pass unless you can identify a clear "hin zu" reframe.
+   Critique is allowed as an enabler, not as the centre of gravity.
 
 Hard rule: NEVER select a candidate sourced from McKinsey, BCG, Bain, PwC, EY,
 Deloitte, or KPMG — these are direct competitors. If a candidate's only source is
@@ -70,11 +80,18 @@ the designated fields.
 """
 
 
-def build_user_message(research: str, history: str, learnings: str, author_context: str) -> str:
+def build_user_message(research: str, history: str, learnings: str,
+                       author_context: str, source_freq: str) -> str:
     today = datetime.now().strftime("%A, %B %d, %Y")
     author_section = (
         f"## Author Identity & Audience\n{author_context}"
         if author_context else ""
+    )
+    freq_section = (
+        f"## Source Frequency (last 14 posts)\n{source_freq}\n\n"
+        "_Use this to avoid over-reliance on any single source. "
+        "Prefer candidates from underrepresented sources when quality is comparable._"
+        if source_freq else ""
     )
     return textwrap.dedent(f"""
         Today is {today}.
@@ -86,6 +103,8 @@ def build_user_message(research: str, history: str, learnings: str, author_conte
 
         ## Recent Article History (check for repetition)
         {history or "_No history yet._"}
+
+        {freq_section}
 
         ## Today's Research Candidates
         {research}
@@ -145,15 +164,20 @@ def run(client: anthropic.Anthropic | None = None) -> str:
     print("🎯 Selection Agent starting...")
 
     research       = read_file(RESEARCH_NOTES_FILE)
-    history        = extract_recent_history(read_file(DAILY_ARTICLES_FILE), n=14)
+    articles_raw   = read_file(DAILY_ARTICLES_FILE)
+    history        = extract_recent_history(articles_raw, n=14)
+    source_freq    = extract_source_frequency(articles_raw, n=14)
     learnings      = read_file(LEARNINGS_FILE)
     author_context = extract_author_context(read_file(VOICE_FILE))
 
     if not research.strip() or EMPTY_RESEARCH in research:
         raise RuntimeError("No research notes found. Run the Scanning agent first.")
 
+    if source_freq:
+        print(f"\n  📊 Source frequency (last 14 posts):\n{source_freq}\n")
+
     print("\n  Selecting best topic with Claude (adaptive thinking)...\n")
-    user_message = build_user_message(research, history, learnings, author_context)
+    user_message = build_user_message(research, history, learnings, author_context, source_freq)
 
     selection_output = stream_to_stdout(
         client,

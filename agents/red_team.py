@@ -26,6 +26,7 @@ Writes : data/redteam_notes.md   (full iteration history)
 Run standalone:
     python -m agents.red_team
 """
+from __future__ import annotations
 
 import re
 import sys
@@ -78,67 +79,47 @@ def fetch_source(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """\
-You are a two-lens critical reviewer for a senior professional's LinkedIn content.
+You are a critical reviewer for a senior professional's LinkedIn content.
 
 ## Lens 1 — Factual integrity
-Check every claim, statistic, and attribution in the post against the provided
-source article. Flag anything that:
-- Cannot be traced to the source article
-- Goes beyond what the source actually says (exaggeration or extrapolation)
-- Is presented as fact but is a generalisation ("most companies", "research shows")
-  without a specific citation in the source
-- Contradicts the source material
-If the source article could not be fetched, note this and flag any claims that
-appear unverifiable based on the brief alone.
+Check every claim against the source article. Flag:
+- Claims untraceable to the source, or that extrapolate beyond what it says
+- Generalisations presented as fact ("most companies", "research shows") without a source citation
+- Anything that contradicts the source
+If the source could not be fetched, note this and flag unverifiable claims against the brief.
 
 ## Lens 2 — Client perception (HIGH BAR)
-Read as a C-level executive, CHRO, or head of transformation — someone who:
-- Has heard every leadership framework and has a finely tuned bullshit detector
-- Skims LinkedIn and stops only for content that says something they didn't know,
-  challenges a belief they hold, or names a problem they actually face
-- Will immediately scroll past anything that sounds like a consulting deck,
-  a thought leadership template, or a recycled HBR summary
-
+Read as a C-level executive, CHRO, or transformation lead with a finely tuned bullshit detector.
 Flag anything that:
-- Sounds generic enough to have been written about any post on this topic
+- Is generic enough to fit any post on this topic
 - Uses consulting language or corporate register, even subtly
-- Makes claims the reader has seen a hundred times before
-- Delivers a conclusion the reader could have written themselves
 - Has a hook that doesn't earn the reader's commitment in the first two lines
+- Delivers a conclusion the reader could have written themselves
+- Centres on critique or abolition without naming the positive alternative — "weg von" not "hin zu".
+  A post may criticise, but the positive aspiration must be the centre of gravity.
+  Test: can the post be summarised as "more X, more Y" rather than "less A, less B"?
 
 ## Lens 3 — Brief compliance
-Verify the post delivers what the selection brief required. Specifically check:
-- **Source attribution**: Does the post name the correct author and article title
-  from the brief? Cross-check the brief's "Source to reference" section — a wrong
-  author name is an automatic REVISE.
-- **Facilitation / coaching technique**: If the brief asks for a specific method,
-  question, or practice — is one actually present? A concept label ("help people
-  articulate their reasoning") does NOT count. A described method with a who/what/when
-  DOES count.
-- **First-person professional example**: Is there at least one concrete, anonymised
-  professional example (not just abstract commentary)?
-- **CTA alignment**: Does the closing question emerge from the post's own sharpest
-  reframe — or is it a generic question that could belong to any post?
+- **Source attribution**: Correct author and article title from the brief? Wrong author = automatic REVISE.
+- **Facilitation / coaching technique**: If the brief requires a specific method — is one described with who/what/when? A concept label does NOT count.
+- **Professional example**: At least one concrete, anonymised professional example (not abstract commentary).
+- **CTA alignment**: Does the closing question emerge from this post's sharpest reframe — or is it generic?
 
-Flag missing brief requirements as REVISE — these are the most persistent quality
-issues in the channel's history.
+Missing brief requirements = REVISE. These are the channel's most persistent quality issues.
 
 ## Verdict
-Apply a HIGH bar. REVISE unless the post genuinely earns its place in a
-senior professional's feed. Approved posts should feel specific, credible,
-and worth the reader's two minutes.
+HIGH bar. REVISE unless the post genuinely earns its place in a senior professional's feed.
 
-## Output format
-Use EXACTLY this structure — no preamble, no commentary outside these sections:
+## Output format — use EXACTLY this structure, no preamble:
 
 ### Factual issues
-[bullet points — or "None identified." if clean]
+[bullets — or "None identified."]
 
 ### Client perception issues
-[bullet points — or "None identified." if clean]
+[bullets — or "None identified."]
 
 ### Brief compliance issues
-[bullet points — or "All requirements met." if clean]
+[bullets — or "All requirements met."]
 
 ### Verdict
 APPROVED or REVISE
@@ -148,23 +129,18 @@ YES or NO
 (YES only if format or visual assets need changing — not if only text changes)
 
 ### Revision instructions
-[bullet points if REVISE — concrete, specific: "Replace X with Y", "Remove the claim in para 3",
-"The hook needs to name a specific tension, not a general observation"
-Leave empty if APPROVED]
+[bullets if REVISE — concrete: "Replace X with Y", "Remove claim in para 3". Empty if APPROVED]
 """
 
 
 def build_critique_prompt(post_text: str, assets: str, brief: str,
                           source_content: str, learnings: str, voice: str,
-                          iteration: int, prior_feedback: str) -> str:
+                          iteration: int) -> str:
+    """Build the initial (iteration 1) critique prompt with full context."""
     source_section = (
         f"## Source article content (fetched)\n{source_content}"
         if source_content.strip()
         else "## Source article content\n_Could not be fetched — check claims against the brief only._"
-    )
-    prior_section = (
-        f"\n## Prior red team feedback (already sent to writer — check if addressed)\n{prior_feedback}"
-        if prior_feedback.strip() else ""
     )
     return textwrap.dedent(f"""
         Iteration {iteration} of {MAX_ITERATIONS}.
@@ -182,14 +158,30 @@ def build_critique_prompt(post_text: str, assets: str, brief: str,
 
         ## Accumulated learnings from past posts
         {learnings or "_None yet._"}
-        {prior_section}
 
         ## Post to review
         {post_text}
 
         ---
 
-        Review the post now using both lenses. Apply the high bar.
+        Review the post now using all three lenses. Apply the high bar.
+    """).strip()
+
+
+def build_revision_prompt(post_text: str, assets: str, iteration: int) -> str:
+    """Build a follow-up prompt for iteration 2+. Only sends what changed."""
+    return textwrap.dedent(f"""
+        The post has been revised. This is iteration {iteration} of {MAX_ITERATIONS}.
+
+        ## Updated format & asset decision
+        {assets or "_Not available._"}
+
+        ## Revised post
+        {post_text}
+
+        ---
+
+        Re-review using all three lenses. Apply the same high bar.
     """).strip()
 
 
@@ -290,9 +282,10 @@ def run(client: anthropic.Anthropic | None = None) -> str:
         source_content = ""
         print("  ⚠️  No source URL found in selection notes")
 
-    # Iteration loop
+    # Iteration loop — uses multi-turn conversation so static context
+    # (brief, voice, source, learnings) is only sent once on iteration 1.
     entries: list[dict] = []
-    prior_feedback = ""
+    messages: list[dict] = []
 
     for iteration in range(1, MAX_ITERATIONS + 1):
         print(f"\n{'─' * 60}")
@@ -303,11 +296,14 @@ def run(client: anthropic.Anthropic | None = None) -> str:
         if iteration > 1:
             _, post_text = extract_latest_post(read_file(DAILY_ARTICLES_FILE))
             assets = read_file(POST_ASSETS_FILE)
-
-        prompt = build_critique_prompt(
-            post_text, assets, brief, source_content,
-            learnings, voice, iteration, prior_feedback,
-        )
+            # Append previous critique + new revision request (no static context repeat)
+            messages.append({"role": "assistant", "content": entries[-1]["critique"]})
+            messages.append({"role": "user", "content": build_revision_prompt(post_text, assets, iteration)})
+        else:
+            # First iteration: send full context once
+            messages = [{"role": "user", "content": build_critique_prompt(
+                post_text, assets, brief, source_content, learnings, voice, iteration,
+            )}]
 
         critique = stream_to_stdout(
             client,
@@ -315,7 +311,7 @@ def run(client: anthropic.Anthropic | None = None) -> str:
             max_tokens=1500,
             thinking={"type": "adaptive"},
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
         )
 
         # Guard: empty critique (e.g. API timeout) — skip iteration, don't trigger false REVISE
@@ -339,7 +335,6 @@ def run(client: anthropic.Anthropic | None = None) -> str:
         # REVISE — re-run article_writer (and poster if flagged)
         revision_instructions = parse_revision_instructions(critique)
         poster_needs_revision = parse_poster_flag(critique)
-        prior_feedback = revision_instructions
 
         print(f"\n  ↩️  REVISE — re-running Article Writer (iteration {iteration + 1})...")
         from agents.article_writer import run as write_article
