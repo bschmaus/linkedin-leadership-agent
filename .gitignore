@@ -37,3 +37,9 @@ venv/
 # macOS
 .DS_Store
 .AppleDouble
+
+# Claude Code local settings (per-machine, not shared)
+.claude/
+
+# Archived / unused files — kept locally for reference, not shipped
+archive/
